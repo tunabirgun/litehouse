@@ -44,14 +44,14 @@ jobs:
           uv run mypy src/litehouse scripts
           npm run typecheck
           npm run build
+      - name: Build and smoke-test backend sidecar
+        run: |
+          uv run python scripts/build_sidecar.py --target x86_64-unknown-linux-gnu
+          uv run python scripts/smoke_sidecar.py --target x86_64-unknown-linux-gnu --data-dir "$RUNNER_TEMP/litehouse-sidecar-smoke"
       - name: Verify Rust shell
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml --locked
-      - name: Build and smoke-test backend sidecar
-        run: |
-          uv run python scripts/build_sidecar.py --target x86_64-unknown-linux-gnu
-          uv run python scripts/smoke_sidecar.py --target x86_64-unknown-linux-gnu --data-dir "$RUNNER_TEMP/litehouse-sidecar-smoke"
       - name: Build Linux alpha package
         run: npm run desktop:build -- --target x86_64-unknown-linux-gnu --bundles deb
