@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     role="img"
+     aria-labelledby="title description"
+     data-theme="auto">
+  <title id="title">Litehouse lettermark</title>
+  <desc id="description">The letters L and h joined as a compact Garamond lettermark.</desc>
+  <style>
+    :root { color-scheme: light dark; }
+    .lettermark {
+      fill: #211f1a;
+      font-family: "EB Garamond", Garamond, "Times New Roman", serif;
+      font-size: 168px;
+      font-weight: 500;
+      font-kerning: normal;
+      letter-spacing: -7px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .lettermark { fill: #f1ebdf; }
+    }
+    svg[data-theme="light"] .lettermark { fill: #211f1a; }
+    svg[data-theme="dark"] .lettermark { fill: #f1ebdf; }
+  </style>
+  <text class="lettermark"
+        x="124"
+        y="181"
+        text-anchor="middle">Lh</text>
+</svg>

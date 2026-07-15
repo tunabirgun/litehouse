@@ -1,0 +1,44 @@
+{
+  "name": "@litehouse/web",
+  "private": true,
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/eb-garamond": "5.2.7",
+    "@fontsource-variable/source-sans-3": "5.2.9",
+    "@tauri-apps/api": "2.11.1",
+    "i18next": "26.3.6",
+    "lucide-react": "1.24.0",
+    "motion": "12.42.2",
+    "pdfjs-dist": "6.1.200",
+    "react": "19.2.7",
+    "react-aria-components": "1.19.0",
+    "react-dom": "19.2.7",
+    "react-i18next": "17.0.9",
+    "react-router-dom": "7.18.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "jsdom": "27.4.0",
+    "msw": "2.15.0",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
+  }
+}

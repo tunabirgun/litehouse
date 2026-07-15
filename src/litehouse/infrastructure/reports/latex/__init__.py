@@ -1,0 +1,55 @@
+from .compiler import build_latex_report
+from .models import (
+    LatexBuildManifest,
+    LatexBuildResult,
+    LatexCompilationError,
+    LatexCompilerUnavailableError,
+    LatexReportError,
+    LatexSource,
+    LatexVerificationError,
+    PdfAuditResult,
+)
+from .renderer import render_latex, report_input_sha256, tex_escape
+from .runtime import (
+    TECTONIC_BUNDLE_DIGEST,
+    TECTONIC_BUNDLE_INDEX_SHA256,
+    TECTONIC_BUNDLE_URL,
+    TECTONIC_VERSION,
+    TectonicConfirmationRequiredError,
+    TectonicPlatformUnsupportedError,
+    TectonicRuntimeError,
+    TectonicRuntimeStatus,
+    install_tectonic_runtime,
+    resolve_tectonic_runtime,
+    tectonic_runtime_status,
+)
+from .verify import audit_compiler_log, audit_pdf, verify_latex_build
+
+__all__ = [
+    "LatexBuildManifest",
+    "LatexBuildResult",
+    "LatexCompilationError",
+    "LatexCompilerUnavailableError",
+    "LatexReportError",
+    "LatexSource",
+    "LatexVerificationError",
+    "PdfAuditResult",
+    "TECTONIC_BUNDLE_DIGEST",
+    "TECTONIC_BUNDLE_INDEX_SHA256",
+    "TECTONIC_BUNDLE_URL",
+    "TECTONIC_VERSION",
+    "TectonicConfirmationRequiredError",
+    "TectonicPlatformUnsupportedError",
+    "TectonicRuntimeError",
+    "TectonicRuntimeStatus",
+    "audit_compiler_log",
+    "audit_pdf",
+    "build_latex_report",
+    "install_tectonic_runtime",
+    "render_latex",
+    "report_input_sha256",
+    "resolve_tectonic_runtime",
+    "tectonic_runtime_status",
+    "tex_escape",
+    "verify_latex_build",
+]

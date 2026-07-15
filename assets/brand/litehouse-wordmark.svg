@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1000 300"
+     role="img"
+     aria-labelledby="title description"
+     data-theme="auto">
+  <title id="title">Litehouse</title>
+  <desc id="description">The Litehouse name set in a restrained Garamond wordmark.</desc>
+  <style>
+    :root { color-scheme: light dark; }
+    .wordmark {
+      fill: #211f1a;
+      font-family: "EB Garamond", Garamond, "Times New Roman", serif;
+      font-size: 188px;
+      font-weight: 500;
+      font-kerning: normal;
+      letter-spacing: 1px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #f1ebdf; }
+    }
+    svg[data-theme="light"] .wordmark { fill: #211f1a; }
+    svg[data-theme="dark"] .wordmark { fill: #f1ebdf; }
+  </style>
+  <text class="wordmark"
+        x="500"
+        y="208"
+        text-anchor="middle">Litehouse</text>
+</svg>

@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "__LITEHOUSE_TAURI_UPDATER_PUBLIC_KEY__",
+      "endpoints": [
+        "https://github.com/tunabirgun/litehouse/releases/download/updater/latest.json"
+      ],
+      "dangerousInsecureTransportProtocol": false,
+      "windows": { "installMode": "basicUi" }
+    }
+  }
+}
