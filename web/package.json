@@ -16,14 +16,10 @@
     "@fontsource-variable/eb-garamond": "5.2.7",
     "@fontsource-variable/source-sans-3": "5.2.9",
     "@mlc-ai/web-llm": "0.2.84",
-    "i18next": "26.3.6",
     "lucide-react": "1.24.0",
-    "motion": "12.42.2",
     "pdfjs-dist": "6.1.200",
     "react": "19.2.7",
-    "react-aria-components": "1.19.0",
     "react-dom": "19.2.7",
-    "react-i18next": "17.0.9",
     "react-router-dom": "7.18.1"
   },
   "devDependencies": {

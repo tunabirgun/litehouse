@@ -235,6 +235,8 @@ export async function createGroundedReport(input: {
       ? "- The requested LLM synthesis failed citation validation, so Litehouse replaced it with a deterministic evidence listing."
       : input.synthesisFailure
         ? `- The selected synthesis endpoint failed safely (${input.synthesisFailure}); Litehouse used a deterministic evidence listing.`
+      : !input.llmSynthesis
+        ? "- This is a deterministic evidence listing: no local model or API provider was connected, so no AI synthesis was performed. Connect a model or provider in Settings for an AI-written synthesis."
       : "",
   ].filter(Boolean).join("\n");
   const failureRows = sourceFailures.length

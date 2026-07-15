@@ -28,10 +28,14 @@ export function loadAnnotations(sha256: string): ReaderAnnotation[] {
 }
 
 export function saveAnnotations(sha256: string, annotations: readonly ReaderAnnotation[]): void {
-  window.localStorage.setItem(
-    `${STORAGE_PREFIX}.annotations.${sha256}`,
-    JSON.stringify(annotations),
-  );
+  try {
+    window.localStorage.setItem(
+      `${STORAGE_PREFIX}.annotations.${sha256}`,
+      JSON.stringify(annotations),
+    );
+  } catch {
+    // Storage may be blocked or full; the in-memory annotations remain authoritative.
+  }
 }
 
 export function loadProgress(sha256: string): ReaderProgress | null {
@@ -50,5 +54,25 @@ export function loadProgress(sha256: string): ReaderProgress | null {
 }
 
 export function saveProgress(sha256: string, progress: ReaderProgress): void {
-  window.localStorage.setItem(`${STORAGE_PREFIX}.progress.${sha256}`, JSON.stringify(progress));
+  try {
+    window.localStorage.setItem(`${STORAGE_PREFIX}.progress.${sha256}`, JSON.stringify(progress));
+  } catch {
+    // Storage may be blocked or full; progress persistence is best-effort.
+  }
+}
+
+export function deleteAnnotations(sha256: string): void {
+  try {
+    window.localStorage.removeItem(`${STORAGE_PREFIX}.annotations.${sha256}`);
+  } catch {
+    // Removal is best-effort; the in-memory state is already cleared.
+  }
+}
+
+export function deleteProgress(sha256: string): void {
+  try {
+    window.localStorage.removeItem(`${STORAGE_PREFIX}.progress.${sha256}`);
+  } catch {
+    // Removal is best-effort; the in-memory state is already cleared.
+  }
 }

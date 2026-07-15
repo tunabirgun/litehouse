@@ -494,7 +494,11 @@ export function SettingsPage() {
   const [status, setStatus] = useState("");
 
   useEffect(() => {
-    window.localStorage.setItem("litehouse.settings.v1", JSON.stringify(settings));
+    try {
+      window.localStorage.setItem("litehouse.settings.v1", JSON.stringify(settings));
+    } catch {
+      // Private-mode/quota-restricted browsers reject writes; settings persist for the session only.
+    }
   }, [settings]);
 
   function update<K extends keyof LocalSettings>(key: K, value: LocalSettings[K]) {

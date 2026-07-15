@@ -269,7 +269,11 @@ export function ShortcutProvider({
 
   useEffect(() => {
     bindingsRef.current = bindings;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(bindings));
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(bindings));
+    } catch {
+      // Private-mode/quota-restricted browsers reject writes; shortcuts still work in-session.
+    }
   }, [bindings]);
 
   const getBinding = useCallback(

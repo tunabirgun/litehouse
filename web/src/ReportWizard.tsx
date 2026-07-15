@@ -46,7 +46,6 @@ export interface WizardData {
   depth: "brief" | "standard" | "deep";
   recommendations: boolean;
   citation: string;
-  outputs: string[];
 }
 
 export type SubmissionReceipt =
@@ -116,7 +115,6 @@ export function createDefaultDraft(): WizardData {
     depth: "standard",
     recommendations: true,
     citation: preferences.citation?.trim() || "apa-7",
-    outputs: ["markdown"],
   };
 }
 
@@ -135,7 +133,6 @@ function readDraft(): WizardData {
       expertise: Array.isArray(parsed.expertise) ? parsed.expertise : defaults.expertise,
       sources: Array.isArray(parsed.sources) ? parsed.sources : defaults.sources,
       ranking: Array.isArray(parsed.ranking) ? parsed.ranking : defaults.ranking,
-      outputs: defaults.outputs,
     };
   } catch {
     return defaults;
@@ -209,9 +206,6 @@ const copy = {
   recommendations: "Include bounded reading recommendations",
   recommendationsHelp: "Recommendations cite their evidence and explain why the work may merit closer reading.",
   citation: "Reference style",
-  formats: "Output formats",
-  latexHelp: "LaTeX requests render to a monochrome A4 research report with references and a SHA-256 manifest.",
-  webFormatHelp: "The static web alpha currently exports verified Markdown and its JSON integrity manifest. LaTeX/PDF and plain-text renderers are not enabled yet.",
   reviewTitle: "Review the retrieval contract",
   reviewHelp: "These choices become an immutable request revision. Later edits create a new revision so prior reports remain reproducible.",
   inquiry: "Inquiry",
@@ -306,11 +300,6 @@ const optionCopy = {
     ["methodological", "Methodological relevance"],
     ["open-coverage", "Broad and open coverage"],
   ],
-  outputs: [
-    ["markdown", "Markdown (.md)"],
-    ["plain", "Plain text (.txt)"],
-    ["latex", "Rendered LaTeX (.pdf + .tex)"],
-  ],
 } as const;
 
 function optionLabel(option: readonly [string, string]) {
@@ -357,11 +346,6 @@ export function buildApiSpecification(draft: WizardData) {
     methodological: "methodological_relevance",
     "open-coverage": "broad_open_coverage",
   };
-  const outputMap: Record<string, string> = {
-    markdown: "markdown",
-    plain: "plain_text",
-    latex: "latex_pdf",
-  };
   const exclusions = draft.exclusions
     .split(/[\n,;]+/)
     .map((value) => value.trim())
@@ -405,7 +389,7 @@ export function buildApiSpecification(draft: WizardData) {
     impact_intents: draft.ranking.map((value) => rankingMap[value]),
     report_depth: draft.depth,
     include_recommendations: draft.recommendations,
-    output_formats: draft.outputs.map((value) => outputMap[value]),
+    output_formats: ["markdown"],
   };
 }
 
@@ -516,10 +500,15 @@ export async function executeGuidedRequest(
   } catch {
     watches = [];
   }
-  window.localStorage.setItem(
-    "litehouse.browser-watches.v1",
-    JSON.stringify([...watches.filter((item) => objectWatchId(item) !== watchId), watch]),
-  );
+  try {
+    window.localStorage.setItem(
+      "litehouse.browser-watches.v1",
+      JSON.stringify([...watches.filter((item) => objectWatchId(item) !== watchId), watch]),
+    );
+  } catch {
+    // Storage may be blocked or full; the report is already in the vault, so the
+    // watch definition is best-effort and must not fail the run.
+  }
   return {
     kind: "watch",
     watchId,
@@ -564,7 +553,11 @@ export function ReportWizardPage() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem("litehouse.report-draft.v1", JSON.stringify(draft));
+      try {
+        window.localStorage.setItem("litehouse.report-draft.v1", JSON.stringify(draft));
+      } catch {
+        // Storage may be blocked or full; autosave is best-effort and never fatal.
+      }
     }, 180);
     return () => window.clearTimeout(timer);
   }, [draft]);
@@ -589,13 +582,32 @@ export function ReportWizardPage() {
     }
     if (step === 2) return Boolean(draft.disciplines.length && draft.workTypes.length && draft.expertise.length);
     if (step === 3) return Boolean(draft.sources.length && draft.ranking.length);
-    if (step === 4) return draft.outputs.length > 0;
     return true;
+  }
+
+  // Name the field that is blocking the step so the message points somewhere concrete.
+  function requiredMessage() {
+    if (step === 0) return "Add a topic or research question (at least three characters) before continuing.";
+    if (step === 1) {
+      if (!draft.fromDate || !draft.toDate) return "Set both publication dates before continuing.";
+      if (draft.fromDate > draft.toDate) return "Set the From date on or before the To date before continuing.";
+      return "Select at least one publication language before continuing.";
+    }
+    if (step === 2) {
+      if (!draft.disciplines.length) return "Select at least one research field before continuing.";
+      if (!draft.workTypes.length) return "Select at least one work type before continuing.";
+      return "Select at least one expertise level before continuing.";
+    }
+    if (step === 3) {
+      if (!draft.sources.length) return "Select at least one scholarly source before continuing.";
+      return "Select at least one impact-ranking intent before continuing.";
+    }
+    return c.required;
   }
 
   function next() {
     if (!validCurrentStep()) {
-      setError(c.required);
+      setError(requiredMessage());
       window.setTimeout(() => errorRef.current?.focus(), 0);
       return;
     }
@@ -652,7 +664,6 @@ export function ReportWizardPage() {
       expertise: labels("expertise", draft.expertise),
       sources: labels("sources", draft.sources),
       ranking: labels("ranking", draft.ranking),
-      outputs: labels("outputs", draft.outputs),
     };
   }, [draft]);
 
@@ -832,7 +843,6 @@ function EvidenceStep({ c, draft, update }: { c: Copy; draft: WizardData; update
 }
 
 function OutputStep({ c, draft, update }: { c: Copy; draft: WizardData; update: Update }) {
-  const outputOptions = optionCopy.outputs.slice(0, 1);
   return (
     <WizardSection title={c.outputTitle} index="05">
       <fieldset className="lh-fieldset">
@@ -843,9 +853,6 @@ function OutputStep({ c, draft, update }: { c: Copy; draft: WizardData; update: 
       </fieldset>
       <label className="lh-checkbox lh-feature-check"><input type="checkbox" checked={draft.recommendations} onChange={(event) => update("recommendations", event.target.checked)} /><span><b>{c.recommendations}</b><small>{c.recommendationsHelp}</small></span></label>
       <label className="lh-field lh-select-field"><span>{c.citation}</span><select value={draft.citation} onChange={(event) => update("citation", event.target.value)}><option value="apa-7">APA 7</option><option value="ieee">IEEE</option><option value="chicago-author-date">Chicago author–date</option><option value="mla-9">MLA 9</option><option value="vancouver">Vancouver</option><option value="harvard-cite-them-right">Harvard</option></select></label>
-      <CheckboxGroup legend={c.formats} options={outputOptions} values={draft.outputs} onChange={(value) => update("outputs", toggleValue(draft.outputs, value))} />
-      <p className="lh-safety-note"><FileCheck2 aria-hidden="true" size={18} /> {c.webFormatHelp}</p>
-      {draft.outputs.includes("latex") && <p className="lh-safety-note"><FileCheck2 aria-hidden="true" size={18} /> {c.latexHelp}</p>}
     </WizardSection>
   );
 }
@@ -938,7 +945,7 @@ function ReviewStep({
         <div><dt>{c.audience}</dt><dd>{labels.expertise}<span>{labels.disciplines} · {labels.workTypes}</span></dd></div>
         <div><dt>{c.accessReview}</dt><dd>{draft.accessPolicy === "open-only" ? c.openOnly : c.includeAbstracts}<span>{labels.sources}</span></dd></div>
         <div><dt>{c.rankingReview}</dt><dd>{labels.ranking}<span>{c.rankingTruth}</span></dd></div>
-        <div><dt>{c.deliverables}</dt><dd>{labels.outputs}<span>{draft.citation} · {c[draft.depth]} · {draft.recommendations ? c.recommendations : "—"}</span></dd></div>
+        <div><dt>{c.deliverables}</dt><dd>{c[draft.depth]}<span>{draft.citation} · {draft.recommendations ? c.recommendations : "—"}</span></dd></div>
       </dl>
       <p className="lh-local-caveat">{c.localCaveat}</p>
       {submitting && progress && (

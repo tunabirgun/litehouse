@@ -9,20 +9,26 @@ import {
   Search,
   ShieldCheck,
   Tags,
+  Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
+import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
 import {
   type IntegrityState,
   type LibraryExportArtifact,
   type LibraryItemFixture,
   type LibraryReadingState,
-  libraryFixtures,
 } from "./library-fixtures";
-import { getBrowserReport, listBrowserReports } from "./browser/vault";
+import {
+  deleteBrowserReport,
+  garbageCollectBrowserArtifacts,
+  getBrowserReport,
+  listBrowserReports,
+} from "./browser/vault";
 import { sha256Hex } from "./research/integrity";
 import type { GroundedReport } from "./research/report";
 import { detectShortcutPlatform, formatShortcut } from "./shortcuts";
@@ -31,8 +37,9 @@ const copy = {
   eyebrow: "Local research vault",
   title: "Library",
   lede: "Articles, books, reports, notes, and rendered reviews stay searchable with their source and integrity state.",
-  fixture: "Demonstration records",
-  fixtureHelp: "The records below test multidisciplinary library workflows. They are not the result of a live search in this session.",
+  emptyTitle: "Your generated reports and saved papers appear here.",
+  emptyWhy: "Everything stays in this browser.",
+  emptyAction: "New report",
   live: "Local vault records",
   liveHelp: "These records and hashes come from the authenticated local vault on this device.",
   browserLive: "Browser-local reports",
@@ -50,19 +57,24 @@ const copy = {
   unread: "Unread",
   reading: "Reading",
   read: "Read",
-  verified: "SHA verified",
-  changed: "File changed",
+  verified: "Text verified",
+  changed: "Text changed",
   metadataOnly: "Metadata only",
-  results: "{{count}} library items",
   noResults: "No library items match these filters.",
   clear: "Clear filters",
   open: "Open",
   openReader: "Open in reader",
+  openReport: "Open report",
   openRecord: "Open evidence record",
   markRead: "Mark as read",
   markUnread: "Mark as unread",
   verify: "Verify SHA-256",
   export: "Export artifact",
+  deleteReport: "Delete report",
+  deleteReportTitle: "Delete this report?",
+  deleteReportBody:
+    "This report is stored only in this browser, with no copy on any server. Deleting it permanently removes the report and its cached evidence from this device, and this cannot be undone. Export it first if you want to keep a copy.",
+  reportDeleted: "Report deleted from this browser.",
   exportTitle: "Export {{title}}",
   exportIntro: "Choose one verified vault artifact. Every export is rehashed before the native save dialog opens.",
   exportClose: "Close export chooser",
@@ -85,31 +97,12 @@ const copy = {
   menu: "More actions for {{title}}",
   tags: "Tags",
   recordDetails: "Collection, tags, and integrity receipt",
-  source: "Source",
   access: "Access",
   checked: "Integrity check completed for {{title}}.",
-  noteOpen: "A verified or local full-text file opens in the reader. Abstract-only records open their evidence record.",
+  noteOpen: "Stored reports open as a rendered document.",
   openFull: "Open full text",
   abstractOnly: "Abstract only",
   localCopy: "Local copy",
-  acquire: "Save open-access PDF",
-  acquireTitle: "Save from an approved repository",
-  acquireIntro: "Enter a repository identifier. Litehouse constructs the official address; arbitrary download URLs are never accepted.",
-  provider: "Repository",
-  recordTitle: "Article title",
-  identifier: "Repository identifier",
-  exactPath: "Canonical PMC OA PDF path",
-  arxivHelp: "Example: 2607.01234 or hep-th/9901001v2",
-  pmcHelp: "Use the exact path from the PMC Open Access file list, such as /pub/pmc/oa_pdf/ab/cd/file.PMC1234567.pdf.",
-  acquisitionPolicy: "Only fixed arXiv and PMC hosts are allowed. Redirects are refused, the PDF is capped at 100 MiB, and its SHA-256 is verified before registration.",
-  licenseCaveat: "Open-access evidence does not establish a reuse license. Litehouse records no license unless a separate license has been verified.",
-  cancel: "Cancel",
-  save: "Save verified PDF",
-  saving: "Saving and verifying…",
-  saved: "Verified PDF saved",
-  savedDetail: "Receipt SHA-256",
-  close: "Close",
-  acquisitionFailed: "The repository PDF could not be saved. Check the canonical identifier and try again.",
 } as const;
 
 const disciplineLabels = {
@@ -142,6 +135,8 @@ export function LibraryPage() {
   const searchRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuReturnFocus = useRef<HTMLElement | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [discipline, setDiscipline] = useState("all");
   const [readingFilter, setReadingFilter] = useState("all");
@@ -151,6 +146,7 @@ export function LibraryPage() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [status, setStatus] = useState("");
   const [exportItemId, setExportItemId] = useState<string | null>(null);
+  const [deleteItemId, setDeleteItemId] = useState<string | null>(null);
   const [items, setItems] = useState<readonly LibraryItemFixture[]>([]);
   const [vaultState, setVaultState] = useState<"loading" | "live" | "error">(
     "loading",
@@ -213,6 +209,15 @@ export function LibraryPage() {
     return () => { cancelled = true; };
   }, [c.loadFailed]);
 
+  // Surface a status passed via navigation state (e.g. after deleting a report from its page),
+  // then clear it so it does not reappear on back-navigation.
+  useEffect(() => {
+    const incoming = (location.state as { status?: string } | null)?.status;
+    if (!incoming) return;
+    setStatus(incoming);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location, navigate]);
+
   useEffect(() => {
     const focusSearch = () => searchRef.current?.focus();
     window.addEventListener("litehouse:library-search", focusSearch);
@@ -221,14 +226,38 @@ export function LibraryPage() {
 
   useEffect(() => {
     if (!contextMenu) return;
-    const timer = window.setTimeout(() => menuRef.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus(), 0);
+    const timer = window.setTimeout(() => menuRef.current?.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)")?.focus(), 0);
     const close = (event: PointerEvent) => {
       if (!(event.target instanceof Node) || !menuRef.current?.contains(event.target)) setContextMenu(null);
     };
+    // Document-level so Escape closes even after focus leaves the menu, and Tab stays trapped inside it.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        const trigger = menuReturnFocus.current;
+        setContextMenu(null);
+        if (trigger) window.setTimeout(() => trigger.focus(), 0);
+        return;
+      }
+      if (event.key !== "Tab" || !menuRef.current) return;
+      const items = [...menuRef.current.querySelectorAll<HTMLElement>("[role=menuitem]:not(:disabled)")];
+      if (!items.length) return;
+      const first = items[0];
+      const last = items.at(-1) ?? first;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKeyDown);
     return () => {
       window.clearTimeout(timer);
       document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKeyDown);
     };
   }, [contextMenu]);
 
@@ -243,7 +272,7 @@ export function LibraryPage() {
     }
   }, [contextMenu]);
 
-  const allItems = useMemo(() => [...libraryFixtures, ...items], [items]);
+  const allItems = items;
   const collections = useMemo(() => [...new Set(allItems.map((item) => item.collection))].sort(), [allItems]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("en");
@@ -261,13 +290,33 @@ export function LibraryPage() {
       );
     });
   }, [allItems, collection, discipline, integrityFilter, query, readingFilter, readingStates]);
-  const demoItems = useMemo(() => filtered.filter((item) => !item.live), [filtered]);
   const liveItems = useMemo(() => filtered.filter((item) => item.live), [filtered]);
 
   const closeExport = useCallback(() => {
     setExportItemId(null);
     window.setTimeout(() => menuReturnFocus.current?.focus(), 0);
   }, []);
+
+  const closeDelete = useCallback(() => {
+    setDeleteItemId(null);
+    const target = menuReturnFocus.current;
+    if (target && document.contains(target)) window.setTimeout(() => target.focus(), 0);
+  }, []);
+
+  async function deleteReport(item: LibraryItemFixture) {
+    if (!item.browserReportId) return;
+    try {
+      await deleteBrowserReport(item.browserReportId);
+      await garbageCollectBrowserArtifacts();
+      setItems((prev) => prev.filter((entry) => entry.id !== item.id));
+      setStatus(c.reportDeleted);
+    } catch {
+      setStatus(c.loadFailed);
+    }
+    setDeleteItemId(null);
+    // The deleted card and its menu trigger are gone; move focus to the always-present search.
+    window.setTimeout(() => searchRef.current?.focus(), 0);
+  }
   const activeFilterCount = [discipline, readingFilter, integrityFilter, collection]
     .filter((value) => value !== "all").length;
 
@@ -345,6 +394,7 @@ export function LibraryPage() {
 
   const contextItem = contextMenu ? allItems.find((item) => item.id === contextMenu.itemId) : undefined;
   const exportItem = exportItemId ? allItems.find((item) => item.id === exportItemId) : undefined;
+  const deleteItem = deleteItemId ? allItems.find((item) => item.id === deleteItemId) : undefined;
 
   return (
     <main id="main-content" className="page lh-library-page" tabIndex={-1}>
@@ -367,49 +417,35 @@ export function LibraryPage() {
       </section>
 
       <div className="lh-result-heading">
-        <p aria-live="polite">{c.results.replace("{{count}}", String(filtered.length))}</p>
+        <p aria-live="polite">{filtered.length} library {filtered.length === 1 ? "item" : "items"}</p>
         {(query || discipline !== "all" || readingFilter !== "all" || integrityFilter !== "all" || collection !== "all") && <button type="button" onClick={clearFilters}>{c.clear}</button>}
       </div>
 
-      {filtered.length ? (
-        <>
-          {demoItems.length > 0 && (
-            <section className="lh-library-section" aria-labelledby="library-demo-heading">
-              <aside className="lh-fixture-notice">
-                <BookMarked aria-hidden="true" size={19} />
-                <div>
-                  <h2 id="library-demo-heading">{c.fixture}</h2>
-                  <p>{c.fixtureHelp}</p>
-                </div>
-              </aside>
-              <div className="lh-library-list">
-                {demoItems.map((item) => (
-                  <LibraryCard key={item.id} item={item} state={readingStates[item.id] ?? item.readingState} c={c} onMenu={openMenu} />
-                ))}
-              </div>
-            </section>
-          )}
-          {(liveItems.length > 0 || vaultState !== "live") && (
-            <section className="lh-library-section" aria-labelledby="library-live-heading">
-              <aside className="lh-fixture-notice">
-                <BookMarked aria-hidden="true" size={19} />
-                <div>
-                  <h2 id="library-live-heading">{c.browserLive}</h2>
-                  <p>{vaultState === "loading" ? c.loading : vaultState === "error" ? c.loadFailed : c.browserLiveHelp}</p>
-                </div>
-              </aside>
-              {liveItems.length > 0 && (
-                <div className="lh-library-list">
-                  {liveItems.map((item) => (
-                    <LibraryCard key={item.id} item={item} state={readingStates[item.id] ?? item.readingState} c={c} onMenu={openMenu} />
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-        </>
-      ) : (
+      {vaultState === "live" && items.length === 0 ? (
+        <div className="empty-state">
+          <p>{c.emptyTitle}</p>
+          <p>{c.emptyWhy}</p>
+          <p><Link className="button button-primary" to="/reports/new">{c.emptyAction}</Link></p>
+        </div>
+      ) : items.length > 0 && filtered.length === 0 ? (
         <div className="lh-empty-library"><Search aria-hidden="true" size={24} /><p>{c.noResults}</p><button className="button button-secondary" type="button" onClick={clearFilters}>{c.clear}</button></div>
+      ) : (
+        <section className="lh-library-section" aria-labelledby="library-live-heading">
+          <aside className="lh-fixture-notice">
+            <BookMarked aria-hidden="true" size={19} />
+            <div>
+              <h2 id="library-live-heading">{c.browserLive}</h2>
+              <p>{vaultState === "loading" ? c.loading : vaultState === "error" ? c.loadFailed : c.browserLiveHelp}</p>
+            </div>
+          </aside>
+          {liveItems.length > 0 && (
+            <div className="lh-library-list">
+              {liveItems.map((item) => (
+                <LibraryCard key={item.id} item={item} state={readingStates[item.id] ?? item.readingState} c={c} onMenu={openMenu} />
+              ))}
+            </div>
+          )}
+        </section>
       )}
       <p className="lh-reader-note"><FileText aria-hidden="true" size={17} /> {c.noteOpen}</p>
       {!exportItemId && <p className="sr-only" role="status" aria-live="polite">{status}</p>}
@@ -424,19 +460,16 @@ export function LibraryPage() {
             left: Math.min(Math.max(8, contextMenu.x), Math.max(8, window.innerWidth - 244)),
             top: Math.max(8, contextMenu.y),
           }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              closeMenu(true);
-            }
-          }}
         >
           {contextItem.live && !contextItem.artifactId && !contextItem.browserReportId
             ? <button role="menuitem" type="button" disabled><FileText aria-hidden="true" size={16} />{c.openRecord}</button>
-            : <Link role="menuitem" to={openPathFor(contextItem)}><FileText aria-hidden="true" size={16} />{contextItem.access === "abstract-only" ? c.openRecord : c.openReader}</Link>}
+            : <Link role="menuitem" to={openPathFor(contextItem)}><FileText aria-hidden="true" size={16} />{contextItem.browserReportId ? c.openReport : contextItem.access === "abstract-only" ? c.openRecord : c.openReader}</Link>}
           {(!contextItem.live || contextItem.browserReportId) && <button role="menuitem" type="button" onClick={() => toggleRead(contextItem)}><Check aria-hidden="true" size={16} />{(readingStates[contextItem.id] ?? contextItem.readingState) === "read" ? c.markUnread : c.markRead}</button>}
           <button role="menuitem" type="button" onClick={() => void verify(contextItem)} disabled={contextItem.browserReportId ? !contextItem.sha256 : contextItem.live ? !contextItem.verificationArtifactId : !contextItem.sha256}><Hash aria-hidden="true" size={16} />{c.verify}</button>
           <button role="menuitem" type="button" disabled={!contextItem.browserReportId || !contextItem.live || !contextItem.exportArtifacts?.length} onClick={() => { setStatus(""); setExportItemId(contextItem.id); closeMenu(); }}><FileDown aria-hidden="true" size={16} />{c.export}</button>
+          {contextItem.browserReportId && contextItem.live && (
+            <button role="menuitem" type="button" onClick={() => { setStatus(""); setDeleteItemId(contextItem.id); closeMenu(); }}><Trash2 aria-hidden="true" size={16} />{c.deleteReport}</button>
+          )}
         </div>,
         document.body,
       )}
@@ -450,6 +483,14 @@ export function LibraryPage() {
           onClose={closeExport}
         />
       )}
+      <ConfirmDeleteDialog
+        open={Boolean(deleteItem)}
+        title={c.deleteReportTitle}
+        body={c.deleteReportBody}
+        confirmLabel={c.deleteReport}
+        onConfirm={() => { if (deleteItem) void deleteReport(deleteItem); }}
+        onCancel={closeDelete}
+      />
     </main>
   );
 }
@@ -570,8 +611,7 @@ function LibraryCard({ item, state, c, onMenu }: { item: LibraryItemFixture; sta
 
 function openPathFor(item: LibraryItemFixture) {
   if (item.browserReportId) return `/reports/local/${encodeURIComponent(item.browserReportId)}`;
-  if (item.live && item.artifactId) return `/library/${encodeURIComponent(item.id)}/read`;
-  return item.access === "abstract-only" ? "/reports/demo" : "/library/demo/read";
+  return `/library/${encodeURIComponent(item.id)}/read`;
 }
 
 function integrityLabel(state: IntegrityState, c: LibraryCopy) {

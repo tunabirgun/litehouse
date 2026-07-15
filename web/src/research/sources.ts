@@ -1025,7 +1025,10 @@ export async function searchLiterature(request: LiteratureSearchRequest): Promis
   const { records: boundedRecords, audit: boundaryAudit } = enforceBoundaries(reconciled, normalized, receipts, parsedRecords);
   const records = rankByRelevance(boundedRecords, request.query);
   const completedAt = new Date().toISOString();
-  const resultSha256 = await digestCanonical({ completedAt, records, receipts, requestSha256, boundaryAudit });
+  // The evidence digest must be reproducible from the stored report, so it excludes the
+  // non-deterministic completedAt timestamp — otherwise the on-open recompute in
+  // BrowserReportPage (which has no completedAt) would always report a false mismatch.
+  const resultSha256 = await digestCanonical({ records, receipts, requestSha256, boundaryAudit });
   return { records, receipts, requestSha256, resultSha256, completedAt, boundaryAudit };
 }
 

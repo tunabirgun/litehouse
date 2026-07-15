@@ -1,12 +1,17 @@
-import { Check, Download, ExternalLink, ShieldAlert, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Check, Download, ExternalLink, Printer, ShieldAlert, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
+import { Fragment, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { getBrowserReport } from "./browser/vault";
+import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
+import { deleteBrowserReport, getBrowserReport } from "./browser/vault";
 import { digestCanonical } from "./research/integrity";
 import { reportToLatex } from "./research/latex";
+import { parseInline } from "./research/markdown";
 import type { GroundedReport } from "./research/report";
 import "./browser-vault.css";
+
+const DELETE_REPORT_BODY =
+  "This report is stored only in this browser, with no copy on any server. Deleting it permanently removes the report and its cached evidence from this device, and this cannot be undone. Export it first if you want to keep a copy.";
 
 type LoadState =
   | { kind: "loading" }
@@ -23,6 +28,26 @@ function download(name: string, mediaType: string, value: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+// Lowercase, non-alphanumerics to "-", collapsed and trimmed, for readable export filenames.
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "");
+}
+
+// Render the report's limited inline Markdown (**strong**, *em*, `code`) honouring the
+// backslash escapes escapeMarkdown() adds, so no raw \_ \< or ** leaks onto the page.
+function Inline({ text }: { text: string }) {
+  return (
+    <>
+      {parseInline(text).map((token, index) => {
+        if (token.type === "strong") return <strong key={index}>{token.value}</strong>;
+        if (token.type === "em") return <em key={index}>{token.value}</em>;
+        if (token.type === "code") return <code key={index}>{token.value}</code>;
+        return <Fragment key={index}>{token.value}</Fragment>;
+      })}
+    </>
+  );
+}
+
 function ReportBody({ markdown }: { markdown: string }) {
   const lines = markdown.split("\n");
   return (
@@ -30,11 +55,12 @@ function ReportBody({ markdown }: { markdown: string }) {
       {lines.map((line, index) => {
         const key = `${index}-${line.slice(0, 24)}`;
         if (!line.trim() || line.startsWith("# ")) return null;
-        if (line.startsWith("## ")) return <h2 key={key}>{line.slice(3)}</h2>;
-        if (line.startsWith("### ")) return <h3 key={key}>{line.slice(4)}</h3>;
-        if (line.startsWith("- ")) return <p className="browser-report-bullet" key={key}>— {line.slice(2)}</p>;
-        if (/^\d+\.\s/u.test(line)) return <p className="browser-report-reference" key={key}>{line}</p>;
-        return <p key={key}>{line.replaceAll("**", "").replaceAll("`", "")}</p>;
+        if (line.startsWith("## ")) return <h2 key={key}><Inline text={line.slice(3)} /></h2>;
+        if (line.startsWith("### ")) return <h3 key={key}><Inline text={line.slice(4)} /></h3>;
+        if (/^-{3,}$/u.test(line.trim())) return <hr key={key} />;
+        if (line.startsWith("- ")) return <p className="browser-report-bullet" key={key}>— <Inline text={line.slice(2)} /></p>;
+        if (/^\d+\.\s/u.test(line)) return <p className="browser-report-reference" key={key}><Inline text={line} /></p>;
+        return <p key={key}><Inline text={line} /></p>;
       })}
     </div>
   );
@@ -42,7 +68,9 @@ function ReportBody({ markdown }: { markdown: string }) {
 
 export function BrowserReportPage() {
   const { reportId = "" } = useParams();
+  const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -69,7 +97,7 @@ export function BrowserReportPage() {
   if (state.kind !== "ready") {
     return (
       <main id="main-content" className="page browser-report-page" tabIndex={-1}>
-        <Link className="back-link" to="/today">Back to Today</Link>
+        <Link className="back-link" to="/library">Back to Library</Link>
         <section className={`native-today-state${state.kind === "invalid" ? " is-error" : ""}`} role={state.kind === "invalid" ? "alert" : "status"}>
           <h1>{state.kind === "loading" ? "Opening local report…" : state.kind === "invalid" ? "Integrity check failed" : "Report not found"}</h1>
           <p>{state.kind === "invalid" ? "Litehouse will not render a browser-vault report whose Markdown no longer matches its SHA-256 receipt." : "This report may belong to a different browser profile or may have been removed."}</p>
@@ -79,9 +107,11 @@ export function BrowserReportPage() {
   }
 
   const { report, evidenceVerified } = state;
+  const fileSlug = slug(report.title).slice(0, 60).replace(/-+$/u, "") || "report";
+  const fileBase = `litehouse-${fileSlug}-${report.id.slice(0, 8)}`;
   return (
     <main id="main-content" className="page browser-report-page" tabIndex={-1}>
-      <Link className="back-link" to="/today">Back to Today</Link>
+      <Link className="back-link" to="/library">Back to Library</Link>
       <header className="report-header">
         <div className="report-heading-copy">
           <p className="eyebrow">Browser-local literature report</p>
@@ -89,15 +119,16 @@ export function BrowserReportPage() {
           <p className="lede">Evidence-bounded synthesis with source-level retrieval receipts.</p>
         </div>
         <div className="report-actions">
-          <button className="button button-secondary" type="button" onClick={() => download(`litehouse-${report.id}.md`, "text/markdown", report.markdown)}><Download aria-hidden="true" size={17} />Markdown</button>
-          <button className="button button-secondary" type="button" onClick={() => download(`litehouse-${report.id}.tex`, "application/x-tex", reportToLatex(report))}><Download aria-hidden="true" size={17} />LaTeX</button>
-          <button className="button button-secondary" type="button" onClick={() => window.print()}><Download aria-hidden="true" size={17} />Print / PDF</button>
-          <button className="button button-secondary" type="button" onClick={() => download(`litehouse-${report.id}.json`, "application/json", JSON.stringify(report, null, 2))}><Download aria-hidden="true" size={17} />Manifest</button>
+          <button className="button button-secondary" type="button" onClick={() => download(`${fileBase}.md`, "text/markdown", report.markdown)}><Download aria-hidden="true" size={17} />Markdown</button>
+          <button className="button button-secondary" type="button" onClick={() => download(`${fileBase}.tex`, "application/x-tex", reportToLatex(report))}><Download aria-hidden="true" size={17} />LaTeX</button>
+          <button className="button button-secondary" type="button" onClick={() => window.print()}><Printer aria-hidden="true" size={17} />Print / PDF</button>
+          <button className="button button-secondary" type="button" onClick={() => download(`${fileBase}.json`, "application/json", JSON.stringify(report, null, 2))}><Download aria-hidden="true" size={17} />Manifest</button>
+          <button className="button button-danger" type="button" onClick={() => setConfirmOpen(true)}><Trash2 aria-hidden="true" size={17} />Delete</button>
         </div>
       </header>
 
       <details className="verification-receipt" open>
-        <summary><span className="verification-seal" aria-hidden="true">{evidenceVerified ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}</span><span><small className={`receipt-status${evidenceVerified ? "" : " is-mismatch"}`}>{evidenceVerified ? <><Check size={14} /> verified on open</> : <><TriangleAlert size={14} /> evidence mismatch</>}</small><b>Integrity receipt</b></span></summary>
+        <summary><span className="verification-seal" aria-hidden="true">{evidenceVerified ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}</span><span><small className={`receipt-status${evidenceVerified ? "" : " is-mismatch"}`}>{evidenceVerified ? <><Check size={14} /> Evidence verified</> : <><TriangleAlert size={14} /> Evidence mismatch</>}</small><b>Integrity receipt</b></span></summary>
         <dl className="lh-preparation-stats">
           <div><dt>Report SHA-256</dt><dd><code>{report.reportSha256}</code></dd></div>
           <div><dt>Retrieval SHA-256</dt><dd><code>{report.retrievalSha256}</code></dd></div>
@@ -115,23 +146,38 @@ export function BrowserReportPage() {
         <ReportBody markdown={report.markdown} />
       </article>
 
-      <section className="browser-report-sources" aria-labelledby="browser-source-links">
-        <p className="section-index">Source links</p>
-        <h2 id="browser-source-links">Further reading</h2>
-        <ol>
-          {report.records.map((record, index) => {
-            const url = record.openFullTextUrl ?? record.landingUrl;
-            return (
-              <li key={record.id}>
-                <span><b>S{index + 1}</b> {record.title}</span>
-                {url && (evidenceVerified
-                  ? <a href={url} target="_blank" rel="noopener noreferrer">Open source <ExternalLink aria-hidden="true" size={14} /></a>
-                  : <span className="source-url-untrusted">{url}</span>)}
-              </li>
-            );
-          })}
-        </ol>
-      </section>
+      {report.records.length > 0 && (
+        <section className="browser-report-sources" aria-labelledby="browser-source-links">
+          <p className="section-index">Source links</p>
+          <h2 id="browser-source-links">Further reading</h2>
+          <ol>
+            {report.records.map((record, index) => {
+              const url = record.openFullTextUrl ?? record.landingUrl;
+              return (
+                <li key={record.id}>
+                  <span><b>S{index + 1}</b> {record.title}</span>
+                  {url && (evidenceVerified
+                    ? <a href={url} target="_blank" rel="noopener noreferrer">Open source <ExternalLink aria-hidden="true" size={14} /></a>
+                    : <span className="source-url-untrusted">{url}</span>)}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      )}
+
+      <ConfirmDeleteDialog
+        open={confirmOpen}
+        title="Delete this report?"
+        body={DELETE_REPORT_BODY}
+        confirmLabel="Delete report"
+        onConfirm={() => {
+          void deleteBrowserReport(report.id)
+            .then(() => navigate("/library", { state: { status: "Report deleted from this browser." } }))
+            .catch(() => setConfirmOpen(false));
+        }}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </main>
   );
 }

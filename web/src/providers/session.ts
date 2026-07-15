@@ -40,8 +40,12 @@ export function configureSessionRemoteProvider(config: RemoteProviderConfig, api
     ? sessionProvider.apiKey
     : undefined;
   const credential = apiKey?.trim() || retainedCredential;
-  window.localStorage.setItem(CONFIG_KEY, JSON.stringify(safeConfig));
   sessionProvider = { config: safeConfig, ...(credential ? { apiKey: credential } : {}) };
+  try {
+    window.localStorage.setItem(CONFIG_KEY, JSON.stringify(safeConfig));
+  } catch {
+    // Private-mode/quota-restricted browsers reject writes; the provider still works for this session.
+  }
 }
 
 export function getSessionRemoteProvider(): SessionRemoteProvider | null {

@@ -14,6 +14,7 @@ import {
   Search,
   ShieldCheck,
   StickyNote,
+  Trash2,
   Upload,
   X,
   ZoomIn,
@@ -35,16 +36,16 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import {
   annotationsToJson,
   annotationsToMarkdown,
   createAnnotation,
 } from "./anchors";
-import { createDemoPdf } from "./demoPdf";
 import { PdfSurface, PdfThumbnail } from "./PdfSurface";
-import { loadAnnotations, loadProgress, saveAnnotations, saveProgress } from "./storage";
+import { deleteAnnotations, loadAnnotations, loadProgress, saveAnnotations, saveProgress } from "./storage";
+import { ConfirmDeleteDialog } from "../ConfirmDeleteDialog";
 import type {
   ReaderAnnotation,
   ReaderDocumentRecord,
@@ -58,22 +59,23 @@ import type {
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-const DEMO_SHA256 = "652af05f7e4b2250527d86bc34f611d4b9acc138e0633079b3401504701facc6";
 const MAX_LOCAL_PDF_BYTES = 100 * 1024 * 1024;
 
-const demoRecord: ReaderDocumentRecord = {
-  id: "litehouse-reader-demonstration",
-  title: "Reading evidence, not summaries",
-  authors: "Litehouse contributors",
-  citation: "Litehouse contributors. (2026). Litehouse Reader Demonstration [Software fixture].",
-  sourceUrl: "https://github.com/tunabirgun/litehouse",
-  sourceLabel: "Litehouse open demonstration record",
-  license: "CC BY 4.0",
-  licenseUrl: "https://creativecommons.org/licenses/by/4.0/",
-  sha256: DEMO_SHA256,
-  byteLength: 3532,
-  acquiredAt: "2026-07-15T07:30:00+03:00",
-  acquisition: "Bundled fixture · parsed locally · no reader network requests",
+// Placeholder shown before a local PDF is opened; its fields are only rendered
+// once a real document replaces it via openLocalPdf.
+const EMPTY_RECORD: ReaderDocumentRecord = {
+  id: "",
+  title: "",
+  authors: "",
+  citation: "",
+  sourceUrl: "",
+  sourceLabel: "",
+  license: "",
+  licenseUrl: "",
+  sha256: "",
+  byteLength: 0,
+  acquiredAt: new Date(0).toISOString(),
+  acquisition: "",
 };
 
 interface VaultReaderReceipt {
@@ -102,7 +104,6 @@ interface VaultReaderReceipt {
 const copy = {
   back: "Back to Today",
   eyebrow: "Library / saved article",
-  demo: "Open demonstration PDF",
   local: "Open local PDF",
   localHelp: "The selected file remains on this device and is not uploaded.",
   page: "Page",
@@ -147,6 +148,10 @@ const copy = {
   editNote: "Edit note",
   exportMd: "Export Markdown",
   exportJson: "Export JSON",
+  deleteAll: "Delete all notes",
+  deleteAllTitle: "Delete all notes for this document?",
+  deleteAllBody:
+    "Your notes and highlights for this document are stored only in this browser, with no copy on any server. Deleting them is permanent and cannot be undone. Export your notes first if you want to keep them.",
   save: "Save reading state",
   saved: "Reading position and annotations saved on this device.",
   unsaved: "Unsaved reader changes",
@@ -157,7 +162,6 @@ const copy = {
   corruptText: "Litehouse refused to render bytes that did not form a valid PDF. The original artifact was not modified.",
   unsupportedTitle: "This PDF is not supported",
   unsupportedText: "Encrypted, password-protected, oversized, or unsupported PDFs must be converted or unlocked by their owner before reading.",
-  retry: "Return to the verified fixture",
   loading: "Opening PDF in the local sandbox…",
   selectedFirst: "Select text on the current page before adding an annotation.",
   fileTooLarge: "The local PDF exceeds the 100 MiB reader limit.",
@@ -372,21 +376,16 @@ function LazyThumbnail(props: {
 }
 
 export default function ReaderPage() {
-  const { itemId = "demo" } = useParams<{ itemId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const forcedState = searchParams.get("state") as ReaderLoadState | null;
-  const demoBytes = useMemo(() => createDemoPdf(), []);
-  const fixtureMode = itemId === "demo";
-  const [bytes, setBytes] = useState<Uint8Array | null>(
-    fixtureMode && forcedState !== "missing" ? demoBytes : null,
-  );
-  const [record, setRecord] = useState<ReaderDocumentRecord>(demoRecord);
+  const [bytes, setBytes] = useState<Uint8Array | null>(null);
+  const [record, setRecord] = useState<ReaderDocumentRecord>(EMPTY_RECORD);
   const [loadState, setLoadState] = useState<ReaderLoadState>(
-    forcedState === "missing" || forcedState === "unsupported" ? forcedState : "ready",
+    forcedState === "unsupported" ? forcedState : "missing",
   );
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
-  const [loading, setLoading] = useState(loadState === "ready");
-  const [artifactLoading, setArtifactLoading] = useState(!fixtureMode);
+  const [loading, setLoading] = useState(false);
+  const [artifactLoading, setArtifactLoading] = useState(true);
   const [pageTexts, setPageTexts] = useState<string[]>([]);
   const [outline, setOutline] = useState<ReaderOutlineEntry[]>([]);
   const restored = useMemo(() => loadProgress(record.sha256), [record.sha256]);
@@ -410,7 +409,10 @@ export default function ReaderPage() {
   const [integrity, setIntegrity] = useState<"checking" | "verified" | "mismatch">("checking");
   const [viewportElement, setViewportElement] = useState<HTMLElement | null>(null);
   const [thumbnailsOpen, setThumbnailsOpen] = useState(false);
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const searchInput = useRef<HTMLInputElement>(null);
+  const notesHeadingRef = useRef<HTMLHeadingElement>(null);
+  const annotationListRef = useRef<HTMLOListElement>(null);
 
   const effectiveZoom = fitZoom(fitMode, zoom, availableWidth, rotation);
   const results = useMemo(() => searchDocument(pageTexts, query), [pageTexts, query]);
@@ -429,28 +431,14 @@ export default function ReaderPage() {
   }, [viewportElement]);
 
   useEffect(() => {
-    if (fixtureMode) {
-      setArtifactLoading(false);
-      setRecord(demoRecord);
-      setStatus("");
-      if (forcedState === "missing" || forcedState === "unsupported") {
-        setBytes(null);
-        setLoadState(forcedState);
-        setLoading(false);
-      } else {
-        setBytes(demoBytes);
-        setLoadState("ready");
-      }
-      return;
-    }
     // Real library items are not yet readable from the browser vault; show an
     // honest missing state. A local PDF can still be opened from the device.
     setArtifactLoading(false);
     setBytes(null);
     setLoading(false);
-    setLoadState("missing");
+    setLoadState(forcedState === "unsupported" ? "unsupported" : "missing");
     setStatus(copy.missingText);
-  }, [copy.missingText, demoBytes, fixtureMode, forcedState]);
+  }, [copy.missingText, forcedState]);
 
   useEffect(() => {
     if (!bytes) {
@@ -668,8 +656,24 @@ export default function ReaderPage() {
   }
 
   function removeAnnotation(id: string) {
-    setAnnotations((current) => current.filter((item) => item.id !== id));
+    const index = annotations.findIndex((item) => item.id === id);
+    const next = annotations.filter((item) => item.id !== id);
+    setAnnotations(next);
+    // Persist immediately so a deleted note does not reappear before an explicit Save.
+    if (next.length) saveAnnotations(record.sha256, next);
+    else deleteAnnotations(record.sha256);
     setDirty(true);
+    // The removed control unmounts and drops focus to <body>; move it to the next
+    // annotation's delete control, or the notes heading when the list is now empty.
+    window.setTimeout(() => {
+      if (!next.length) {
+        notesHeadingRef.current?.focus();
+        return;
+      }
+      const controls = annotationListRef.current?.querySelectorAll<HTMLButtonElement>(".reader-delete-annotation");
+      const target = controls?.[Math.min(index, controls.length - 1)];
+      (target ?? notesHeadingRef.current)?.focus();
+    }, 0);
   }
 
   async function openLocalPdf(event: ChangeEvent<HTMLInputElement>) {
@@ -710,14 +714,6 @@ export default function ReaderPage() {
     setBytes(localBytes);
   }
 
-  function retryDemo() {
-    setSearchParams({});
-    setRecord(demoRecord);
-    setBytes(createDemoPdf());
-    setLoadState("ready");
-    setStatus("");
-  }
-
   if (artifactLoading) {
     return (
       <main id="main-content" className="page reader-route-loading" tabIndex={-1}>
@@ -741,7 +737,10 @@ export default function ReaderPage() {
           <h1 id="reader-error-title">{stateContent[0]}</h1>
           <p>{stateContent[1]}</p>
           {status && <p className="reader-error-detail">{status}</p>}
-          <button className="button button-primary" type="button" onClick={retryDemo}>{copy.retry}</button>
+          <label className="button button-primary reader-file-button" title={copy.localHelp}>
+            <Upload aria-hidden="true" size={17} /> {copy.local}
+            <input className="sr-only" type="file" accept="application/pdf,.pdf" onChange={(event) => void openLocalPdf(event)} />
+          </label>
         </section>
       </main>
     );
@@ -933,15 +932,18 @@ export default function ReaderPage() {
           ) : (
             <div className="reader-side-content" role="tabpanel">
               <div className="reader-notes-heading">
-                <h2>{copy.annotations}</h2>
+                <h2 ref={notesHeadingRef} tabIndex={-1}>{copy.annotations}</h2>
                 <span className={dirty ? "reader-dirty" : "reader-saved"}>{dirty ? copy.unsaved : copy.saved}</span>
               </div>
               <div className="reader-export-actions">
                 <button type="button" onClick={() => exportNotes("markdown")}><Download aria-hidden="true" /> {copy.exportMd}</button>
                 <button type="button" onClick={() => exportNotes("json")}><Download aria-hidden="true" /> {copy.exportJson}</button>
+                {annotations.length > 0 && (
+                  <button className="reader-delete-all" type="button" onClick={() => setDeleteAllOpen(true)}><Trash2 aria-hidden="true" /> {copy.deleteAll}</button>
+                )}
               </div>
               {annotations.length ? (
-                <ol className="reader-annotation-list">
+                <ol className="reader-annotation-list" ref={annotationListRef}>
                   {annotations.map((annotation) => (
                     <li key={annotation.id}>
                       <button className="reader-annotation-anchor" type="button" onClick={() => goToPage(annotation.anchor.page)}>
@@ -990,6 +992,21 @@ export default function ReaderPage() {
       )}
 
       <div className="reader-live-status" role="status" aria-live="polite">{status}</div>
+
+      <ConfirmDeleteDialog
+        open={deleteAllOpen}
+        title={copy.deleteAllTitle}
+        body={copy.deleteAllBody}
+        confirmLabel={copy.deleteAll}
+        onConfirm={() => {
+          setAnnotations([]);
+          deleteAnnotations(record.sha256);
+          setDeleteAllOpen(false);
+          // The delete-all control unmounts with the list; land focus on the stable notes heading.
+          window.setTimeout(() => notesHeadingRef.current?.focus(), 0);
+        }}
+        onCancel={() => setDeleteAllOpen(false)}
+      />
     </main>
   );
 }

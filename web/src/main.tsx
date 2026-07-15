@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, HashRouter } from "react-router-dom";
 
 import { App } from "./App";
+import { ErrorBoundary } from "./ErrorBoundary";
 import "./styles.css";
 import "./workspace.css";
 import "./declutter.css";
@@ -43,8 +44,10 @@ const Router = import.meta.env.PROD ? HashRouter : BrowserRouter;
 
 createRoot(root).render(
   <StrictMode>
-    <Router>
-      <App />
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <App />
+      </Router>
+    </ErrorBoundary>
   </StrictMode>,
 );
