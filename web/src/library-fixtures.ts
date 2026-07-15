@@ -36,6 +36,7 @@ export interface LibraryItemFixture {
   artifactId?: string;
   verificationArtifactId?: string;
   exportArtifacts?: readonly LibraryExportArtifact[];
+  browserReportId?: string;
 }
 
 export const libraryFixtures: readonly LibraryItemFixture[] = [

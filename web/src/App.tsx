@@ -2,12 +2,11 @@ import {
   BookMarked,
   BookOpen,
   CalendarDays,
-  Check,
   ChevronLeft,
   Download,
   ExternalLink,
   FileOutput,
-  Languages,
+  Laptop,
   Plus,
   Search,
   Settings2,
@@ -38,15 +37,16 @@ import {
 
 import {
   AppearanceProvider,
-  type MotionPreference,
-  type ThemePreference,
   useAppearance,
 } from "./appearance";
-import { claims, digestStudies, localize, type DigestStudy } from "./fixtures";
+import { BrowserReportPage } from "./BrowserReportPage";
+import { listBrowserReports } from "./browser/vault";
+import { claims, localize } from "./fixtures";
 import { I18nProvider, type Locale, useI18n } from "./i18n";
 import { LibraryPage } from "./LibraryPage";
-import { nativeApi } from "./native";
+import { PrivacyPage } from "./PrivacyPage";
 import { ReportWizardPage } from "./ReportWizard";
+import type { GroundedReport } from "./research/report";
 import { SettingsPage } from "./SettingsPage";
 import {
   formatShortcut,
@@ -57,72 +57,105 @@ import {
 
 const ReaderPage = lazy(() => import("./reader/ReaderPage"));
 
-type DisciplineFilter = "all" | DigestStudy["discipline"];
-
-interface NativeWatchSummary {
+interface BrowserWatchSummary {
   id: string;
   name: string;
-  enabled: boolean;
-  active_revision: {
-    id: string;
-    number: number;
+  specificationSha256: string;
+  createdAt: string;
+  lastReportId: string;
+  specification: {
+    timezone?: string;
+    schedule?: { kind?: string; expression?: string };
   };
 }
 
-interface NativeRunSummary {
-  id: string;
-  watch_revision_id: string;
-  status: string;
-  scheduled_at: string;
-  finished_at: string | null;
-  report_id: string | null;
-  result_sha256: string | null;
-  artifact_count: number;
-  source_error_count: number;
-}
-
-interface NativeLibrarySummary {
-  id: string;
-  title: string;
-  kind: string;
-  identity_sha256: string;
-  added_at: string;
-}
-
-type NativeTodayState =
+type BrowserTodayState =
   | { status: "idle" | "loading" }
   | { status: "error" }
-  | {
-      status: "ready";
-      watches: NativeWatchSummary[];
-      runs: NativeRunSummary[];
-      items: NativeLibrarySummary[];
-    };
+  | { status: "ready"; reports: GroundedReport[]; watches: BrowserWatchSummary[] };
 
-const disciplineOrder: DisciplineFilter[] = [
-  "all",
-  "biomedicine",
-  "climate",
-  "computing",
-  "social",
-  "astronomy",
-];
+function readBrowserWatches(): BrowserWatchSummary[] {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem("litehouse.browser-watches.v1") ?? "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((value): value is BrowserWatchSummary => {
+        if (!value || typeof value !== "object") return false;
+        const watch = value as Partial<BrowserWatchSummary>;
+        return typeof watch.id === "string"
+          && typeof watch.name === "string"
+          && typeof watch.createdAt === "string"
+          && typeof watch.lastReportId === "string"
+          && typeof watch.specificationSha256 === "string"
+          && /^[0-9a-f]{64}$/u.test(watch.specificationSha256)
+          && Number.isFinite(Date.parse(watch.createdAt))
+          && Boolean(watch.specification && typeof watch.specification === "object");
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  } catch {
+    return [];
+  }
+}
 
-function showResearchContextMenu(event: ReactMouseEvent<HTMLElement>) {
-  if (!nativeApi.available) return;
-  event.preventDefault();
-  void nativeApi.showContextMenu("research-item").catch(() => undefined);
+function supportsDemoReportCommands(pathname: string): boolean {
+  const normalizedPath = pathname.replace(/\/+$/u, "") || "/";
+  if (normalizedPath === "/reports/demo") return true;
+  return claims.some(({ id }) => normalizedPath === `/reports/demo/claims/${id}`);
+}
+
+function useNarrowViewport(query = "(max-width: 820px)"): boolean {
+  const [narrow, setNarrow] = useState(() => {
+    try { return window.matchMedia(query).matches; } catch { return false; }
+  });
+  useEffect(() => {
+    let mq: MediaQueryList;
+    try { mq = window.matchMedia(query); } catch { return; }
+    const onChange = () => setNarrow(mq.matches);
+    setNarrow(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [query]);
+  return narrow;
+}
+
+// On phones the WebGPU local model is unavailable; surface an honest, dismissible
+// notice while keeping the app readable. Reading/browsing and BYOK still work.
+function MobileNotice() {
+  const narrow = useNarrowViewport();
+  const [dismissed, setDismissed] = useState(() => {
+    try { return window.localStorage.getItem("litehouse.mobile-notice.v1") === "dismissed"; }
+    catch { return false; }
+  });
+  if (dismissed || !narrow) return null;
+  const dismiss = () => {
+    setDismissed(true);
+    try { window.localStorage.setItem("litehouse.mobile-notice.v1", "dismissed"); } catch { /* private mode */ }
+  };
+  return (
+    <aside className="lh-mobile-notice" role="note" aria-label="Device capability notice">
+      <span className="lh-mobile-notice-mark" aria-hidden="true"><Laptop size={19} /></span>
+      <div className="lh-mobile-notice-body">
+        <p><b>Litehouse works best on a desktop or Mac.</b></p>
+        <p>Its private AI model runs in your browser with WebGPU, which phones generally cannot provide. You can still read reports and browse here — for AI-generated synthesis, open Litehouse on a computer or connect an API key in Settings.</p>
+        <Link to="/privacy" className="lh-mobile-notice-link">How Litehouse handles your data</Link>
+      </div>
+      <button type="button" className="lh-mobile-notice-close" aria-label="Dismiss notice" onClick={dismiss}>
+        <X aria-hidden="true" size={16} />
+      </button>
+    </aside>
+  );
 }
 
 function AppLayout() {
-  const { locale, setLocale, t } = useI18n();
+  const { t } = useI18n();
   const { theme, setTheme } = useAppearance();
   const navigate = useNavigate();
   const location = useLocation();
+  const demoReportCommandsAvailable = supportsDemoReportCommands(location.pathname);
 
   useEffect(() => {
-    document.title = locale === "tr" ? "Litehouse · Araştırma masanız" : "Litehouse · Your research desk";
-  }, [locale]);
+    document.title = "Litehouse · Your research desk";
+  }, []);
 
   const commands = useMemo<ShortcutCommand[]>(
     () => [
@@ -191,25 +224,19 @@ function AppLayout() {
       },
       {
         id: "help.shortcuts",
-        label: locale === "tr" ? "Klavye kısayolları" : "Keyboard shortcuts",
-        description:
-          locale === "tr"
-            ? "Kısayolları görüntüle, yeniden ata veya varsayılanlara döndür"
-            : "View, remap, or restore application shortcuts",
+        label: "Keyboard shortcuts",
+        description: "View, remap, or restore application shortcuts",
         category: "application",
         keywords: ["keyboard", "keys", "accelerators"],
         run: () => navigate("/settings?section=shortcuts"),
       },
       {
         id: "help.diagnostics",
-        label: locale === "tr" ? "Tanılama" : "Diagnostics",
-        description:
-          locale === "tr"
-            ? "Sürüm, veri yolları, güncelleme ve sistem bilgilerini aç"
-            : "Open version, storage path, update, and system information",
+        label: "Diagnostics",
+        description: "Open version, storage path, update, and system information",
         category: "application",
         keywords: ["system", "update", "paths", "support"],
-        run: () => navigate("/settings?section=updates"),
+        run: () => navigate("/settings?section=diagnostics"),
       },
       {
         id: "report.export",
@@ -218,7 +245,7 @@ function AppLayout() {
         category: "research",
         defaultBinding: "Mod+Shift+E",
         keywords: ["Zotero", "EndNote", "Mendeley", "RIS", "BibLaTeX"],
-        enabled: location.pathname.startsWith("/reports/"),
+        enabled: demoReportCommandsAvailable,
         disabledReason: t("shortcuts.reportOnly"),
         run: () => window.dispatchEvent(new CustomEvent("litehouse:report-export")),
       },
@@ -229,7 +256,7 @@ function AppLayout() {
         category: "research",
         defaultBinding: "Mod+Shift+V",
         keywords: ["SHA", "evidence", "integrity"],
-        enabled: location.pathname.startsWith("/reports/"),
+        enabled: demoReportCommandsAvailable,
         disabledReason: t("shortcuts.reportOnly"),
         run: () => navigate("/reports/demo/claims/C-001"),
       },
@@ -307,46 +334,34 @@ function AppLayout() {
         run: () => window.dispatchEvent(new CustomEvent("litehouse:reader-command", { detail: { id: "reader.exportNotes" } })),
       },
     ],
-    [location.pathname, navigate, setTheme, t, theme],
+    [demoReportCommandsAvailable, location.pathname, navigate, setTheme, t, theme],
   );
 
   return (
     <ShortcutProvider commands={commands}>
       <div className="app-shell">
-      <a className="skip-link" href="#main-content">
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
         {t("app.skip")}
       </a>
 
       <header className="masthead">
         <Link className="brand" to="/today" aria-label="Litehouse">
-          <img src="/brand/litehouse-wordmark.svg" alt="Litehouse" />
+          <img className="brand-ink" src={`${import.meta.env.BASE_URL}brand/png/wordmark/ink/litehouse-wordmark-512.png`} alt="Litehouse" />
+          <img className="brand-ivory" src={`${import.meta.env.BASE_URL}brand/png/wordmark/ivory/litehouse-wordmark-512.png`} alt="" aria-hidden="true" />
         </Link>
         <div className="masthead-tools">
           <CommandPaletteButton />
           <span className="local-mark">
             <span aria-hidden="true" className="status-dot" />
-            {nativeApi.available ? t("app.local") : t("app.demo")}
+            Browser-local
           </span>
-          <div className="language-switch" aria-label={t("app.language")}>
-            <Languages aria-hidden="true" size={16} strokeWidth={1.7} />
-            <button
-              type="button"
-              aria-pressed={locale === "en"}
-              onClick={() => setLocale("en")}
-              lang="en"
-            >
-              EN
-            </button>
-            <span aria-hidden="true">/</span>
-            <button
-              type="button"
-              aria-pressed={locale === "tr"}
-              onClick={() => setLocale("tr")}
-              lang="tr"
-            >
-              TR
-            </button>
-          </div>
         </div>
       </header>
 
@@ -362,20 +377,23 @@ function AppLayout() {
             label={t("nav.appearance")}
             icon={<Settings2 />}
           />
-          <p className="nav-foot">Litehouse 0.1 · localhost</p>
+          <NavItem to="/privacy" label={t("nav.privacy")} icon={<ShieldCheck />} />
+          <p className="nav-foot">Litehouse 0.1 · {t("app.browserLocal")}</p>
         </nav>
 
         <div className="route-stage">
+          <MobileNotice />
           <Routes>
             <Route path="/" element={<Navigate replace to="/today" />} />
             <Route path="/today" element={<TodayPage />} />
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/reports/new" element={<ReportWizardPage />} />
+            <Route path="/reports/local/:reportId" element={<BrowserReportPage />} />
             <Route path="/reports/demo" element={<ReportPage />} />
             <Route path="/reports/demo/claims/:claimId" element={<ReportPage />} />
             <Route path="/library/:itemId/read" element={<Suspense fallback={<ReaderLoading />}><ReaderPage /></Suspense>} />
-            <Route path="/settings/appearance" element={<AppearancePage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="*" element={<Navigate replace to="/today" />} />
           </Routes>
         </div>
@@ -394,13 +412,14 @@ function ReaderLoading() {
 }
 
 function CommandPaletteButton() {
-  const { openPalette, platform } = useShortcuts();
+  const { getBinding, openPalette, platform } = useShortcuts();
   const { t } = useI18n();
+  const binding = getBinding("app.commandPalette") ?? "Mod+K";
   return (
     <button className="command-trigger" type="button" aria-label={t("shortcuts.commands")} onClick={openPalette}>
       <Search aria-hidden="true" size={15} strokeWidth={1.7} />
       <span>{t("shortcuts.commands")}</span>
-      <kbd>{formatShortcut("Mod+K", platform)}</kbd>
+      <kbd>{formatShortcut(binding, platform)}</kbd>
     </button>
   );
 }
@@ -417,296 +436,133 @@ function NavItem({ to, label, icon }: { to: string; label: string; icon: React.R
 }
 
 function TodayPage() {
-  const { locale, t } = useI18n();
-  const [filter, setFilter] = useState<DisciplineFilter>("all");
-  const [nativeState, setNativeState] = useState<NativeTodayState>({ status: "idle" });
-  const filteredStudies = useMemo(
-    () => digestStudies.filter((study) => filter === "all" || study.discipline === filter),
-    [filter],
-  );
+  const [browserState, setBrowserState] = useState<BrowserTodayState>({ status: "idle" });
 
   useEffect(() => {
-    if (!nativeApi.available) return;
     let active = true;
-    setNativeState({ status: "loading" });
-    void Promise.all([
-      nativeApi.request<NativeWatchSummary[]>("GET", "/v1/watches"),
-      nativeApi.request<NativeRunSummary[]>("GET", "/v1/runs?limit=12"),
-      nativeApi.request<NativeLibrarySummary[]>("GET", "/v1/library/items?limit=8"),
-    ])
-      .then(([watchResponse, runResponse, libraryResponse]) => {
-        if (!active) return;
-        if (
-          watchResponse.status < 200 || watchResponse.status >= 300
-          || runResponse.status < 200 || runResponse.status >= 300
-          || libraryResponse.status < 200 || libraryResponse.status >= 300
-        ) {
-          setNativeState({ status: "error" });
-          return;
-        }
-        setNativeState({
-          status: "ready",
-          watches: watchResponse.body,
-          runs: [...runResponse.body].sort((left, right) =>
-            right.scheduled_at.localeCompare(left.scheduled_at)),
-          items: [...libraryResponse.body].sort((left, right) =>
-            right.added_at.localeCompare(left.added_at)),
-        });
+    setBrowserState({ status: "loading" });
+    void listBrowserReports()
+      .then((reports) => {
+        if (active) setBrowserState({ status: "ready", reports, watches: readBrowserWatches() });
       })
       .catch(() => {
-        if (active) setNativeState({ status: "error" });
+        if (active) setBrowserState({ status: "error" });
       });
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, []);
 
-  function filterLabel(value: DisciplineFilter) {
-    if (value === "all") return t("today.all");
-    const study = digestStudies.find((item) => item.discipline === value);
-    return study ? localize(study.disciplineLabel, locale) : value;
-  }
-
-  if (nativeApi.available) {
-    return <NativeTodayPage state={nativeState} locale={locale} />;
-  }
-
-  return (
-    <main id="main-content" className="page today-page" tabIndex={-1}>
-      <section className="page-heading heading-with-aside" aria-labelledby="today-title">
-        <div>
-          <p className="eyebrow">{t("today.eyebrow")}</p>
-          <h1 id="today-title">{t("today.title")}</h1>
-          <p className="lede">{t("today.lede")}</p>
-        </div>
-        <Link className="button button-primary" to="/reports/demo">
-          <BookOpen aria-hidden="true" size={18} />
-          {t("today.openReport")}
-        </Link>
-      </section>
-
-      <details className="demo-notice">
-        <summary>
-          <span className="notice-mark" aria-hidden="true">D</span>
-          <span>
-            <b id="demo-title">{t("today.demoTitle")}</b>
-            <small>{t("today.demoText")}</small>
-          </span>
-        </summary>
-        <dl className="run-summary" aria-label="Digest run summary">
-          <div><dt>{t("today.lastRun")}</dt><dd>{t("today.lastRunValue")}</dd></div>
-          <div><dt>{t("today.nextRun")}</dt><dd>{t("today.nextRunValue")}</dd></div>
-          <div>
-            <dt>{t("today.verified")}</dt>
-            <dd className="verified-value"><Check aria-hidden="true" size={16} /> {t("today.verifiedValue")}</dd>
-          </div>
-        </dl>
-      </details>
-
-      <details className="status-change">
-        <summary>
-          <span className="status-symbol" aria-hidden="true">≠</span>
-          <span><small className="section-index">01</small><b id="status-change-heading">{t("today.changed")}</b></span>
-        </summary>
-        <p>{t("today.changedText")}</p>
-      </details>
-
-      <section aria-labelledby="matches-heading" className="digest-section">
-        <div className="section-heading-row">
-          <div>
-            <p className="section-index">02</p>
-            <h2 id="matches-heading">{t("today.matches")}</h2>
-            <p>{t("today.matchesHelp")}</p>
-          </div>
-        </div>
-
-        <div className="filter-bar" role="group" aria-label={t("today.filter")}>
-          {disciplineOrder.map((value) => (
-            <button
-              className="filter-button"
-              type="button"
-              key={value}
-              aria-pressed={filter === value}
-              onClick={() => setFilter(value)}
-            >
-              {filterLabel(value)}
-            </button>
-          ))}
-        </div>
-
-        <div className="study-list" aria-live="polite">
-          {filteredStudies.length ? (
-            filteredStudies.map((study, index) => (
-              <StudyCard study={study} index={index + 1} key={study.id} />
-            ))
-          ) : (
-            <p className="empty-state">{t("today.noResults")}</p>
-          )}
-        </div>
-      </section>
-    </main>
-  );
+  return <BrowserTodayPage state={browserState} />;
 }
 
-function NativeTodayPage({ state, locale }: { state: NativeTodayState; locale: Locale }) {
+function BrowserTodayPage({ state }: { state: BrowserTodayState }) {
   const { t } = useI18n();
-  const formatDate = (value: string) => new Intl.DateTimeFormat(locale === "tr" ? "tr-TR" : "en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
+  const c = {
+    lede: "Verifiable reports and recurring watches stored in this browser profile.",
+    status: "Browser vault status",
+    watches: "Active watches",
+    reports: "Stored reports",
+    latest: "Latest report",
+    recent: "Recent reports",
+    recentHelp: "Reports stored in IndexedDB are rechecked against SHA-256 when opened.",
+    savedWatches: "Recurring watches",
+    watchHelp: "Watch definitions stay in this browser; future updates are started manually while Litehouse is open.",
+    noReports: "No reports are stored in this browser yet.",
+    noReportsHelp: "Create a new report to run your first real literature retrieval.",
+    noWatches: "No recurring watches are stored in this browser.",
+    open: "Open report",
+    records: "accepted records",
+    integrity: "Integrity receipt",
+    created: "Created",
+    schedule: "Schedule",
+    lastReport: "Last report",
+    loading: "Loading browser reports and watches…",
+    unavailable: "Browser vault is unavailable",
+    unavailableHelp: "Litehouse did not substitute demonstration records. Check IndexedDB access in this browser.",
+  };
+  const formatDate = (value: string) => {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "—";
+    return new Intl.DateTimeFormat("en", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(date);
+  };
+  const eyebrowDate = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(new Date());
 
   return (
-    <main id="main-content" className="page today-page native-today-page" tabIndex={-1}>
+    <main id="main-content" className="page today-page native-today-page browser-today-page" tabIndex={-1}>
       <section className="page-heading heading-with-aside" aria-labelledby="today-title">
         <div>
-          <p className="eyebrow">{t("today.eyebrow")}</p>
+          <p className="eyebrow">{eyebrowDate}</p>
           <h1 id="today-title">{t("today.title")}</h1>
-          <p className="lede">{t("today.liveLede")}</p>
+          <p className="lede">{c.lede}</p>
         </div>
-        <Link className="button button-primary" to="/reports/new">
-          <Plus aria-hidden="true" size={18} /> {t("nav.newReport")}
-        </Link>
+        <Link className="button button-primary" to="/reports/new"><Plus aria-hidden="true" size={18} />{t("nav.newReport")}</Link>
       </section>
 
       {state.status === "ready" ? (
-        <NativeTodayDigest state={state} formatDate={formatDate} />
+        <BrowserTodayDigest state={state} c={c} formatDate={formatDate} />
       ) : state.status === "error" ? (
-        <section className="native-today-state is-error" role="alert">
-          <h2>{t("today.unavailable")}</h2>
-          <p>{t("today.unavailableHelp")}</p>
-        </section>
+        <section className="native-today-state is-error" role="alert"><h2>{c.unavailable}</h2><p>{c.unavailableHelp}</p></section>
       ) : (
-        <p className="native-today-state" role="status">{t("today.loading")}</p>
+        <p className="native-today-state" role="status">{c.loading}</p>
       )}
     </main>
   );
 }
 
-function NativeTodayDigest({
-  state,
-  formatDate,
-}: {
-  state: Extract<NativeTodayState, { status: "ready" }>;
+function BrowserTodayDigest({ state, c, formatDate }: {
+  state: Extract<BrowserTodayState, { status: "ready" }>;
+  c: {
+    status: string; watches: string; reports: string; latest: string; recent: string; recentHelp: string;
+    savedWatches: string; watchHelp: string; noReports: string; noReportsHelp: string; noWatches: string;
+    open: string; records: string; integrity: string; created: string; schedule: string; lastReport: string;
+  };
   formatDate: (value: string) => string;
 }) {
-  const { t } = useI18n();
-  const watchByRevision = new Map(
-    state.watches.map((watch) => [watch.active_revision.id, watch.name]),
-  );
-  const recentItems = state.items.filter((item) => item.kind === "report" || item.kind === "work");
-  const latestRun = state.runs[0];
-  const statusLabel = (status: string) => ({
-    queued: t("today.statusQueued"),
-    running: t("today.statusRunning"),
-    partial: t("today.statusPartial"),
-    succeeded: t("today.statusSucceeded"),
-    failed: t("today.statusFailed"),
-    cancelled: t("today.statusCancelled"),
-  })[status] ?? status;
-  const itemKindLabel = (kind: string) => kind === "report"
-    ? t("today.itemReport")
-    : t("today.itemWork");
-
+  const latest = state.reports[0];
+  const reportIds = new Set(state.reports.map((report) => report.id));
   return (
     <>
-      <dl className="native-today-summary" aria-label={t("today.liveStatus")}>
-        <div><dt>{t("today.enabledWatches")}</dt><dd>{state.watches.filter((watch) => watch.enabled).length}</dd></div>
-        <div><dt>{t("today.latestRun")}</dt><dd>{latestRun ? statusLabel(latestRun.status) : t("today.noRunsShort")}</dd></div>
-        <div><dt>{t("today.recentVault")}</dt><dd>{recentItems.length}</dd></div>
+      <dl className="native-today-summary" aria-label={c.status}>
+        <div><dt>{c.watches}</dt><dd>{state.watches.length}</dd></div>
+        <div><dt>{c.reports}</dt><dd>{state.reports.length}</dd></div>
+        <div><dt>{c.latest}</dt><dd>{latest ? formatDate(latest.createdAt) : "—"}</dd></div>
       </dl>
 
-      <section className="native-today-section" aria-labelledby="recent-runs-heading">
-        <div className="section-heading-row">
-          <div><p className="section-index">01</p><h2 id="recent-runs-heading">{t("today.recentRuns")}</h2></div>
-        </div>
-        {state.runs.length ? (
-          <div className="native-run-list">
-            {state.runs.slice(0, 6).map((run) => (
-              <article className="native-run-card" key={run.id}>
-                <div>
-                  <p>{watchByRevision.get(run.watch_revision_id) ?? t("today.previousRevision")}</p>
-                  <h3>{run.report_id ? t("today.reportReady") : t("today.runStatus")}</h3>
-                  <span>{formatDate(run.finished_at ?? run.scheduled_at)} · {statusLabel(run.status)}</span>
-                </div>
-                <details>
-                  <summary>{t("today.runDetails")}</summary>
-                  <dl>
-                    <div><dt>{t("today.artifacts")}</dt><dd>{run.artifact_count}</dd></div>
-                    <div><dt>{t("today.sourceErrors")}</dt><dd>{run.source_error_count}</dd></div>
-                    {run.result_sha256 && <div><dt>SHA-256</dt><dd><code>{run.result_sha256}</code></dd></div>}
-                  </dl>
-                </details>
+      <section className="native-today-section" aria-labelledby="browser-reports-heading">
+        <div className="section-heading-row"><div><p className="section-index">01</p><h2 id="browser-reports-heading">{c.recent}</h2><p>{c.recentHelp}</p></div></div>
+        {state.reports.length ? (
+          <div className="native-vault-list browser-report-list">
+            {state.reports.slice(0, 8).map((report) => (
+              <article key={report.id}>
+                <span>{formatDate(report.createdAt)} · {report.records.length} {c.records}</span>
+                <h3><Link to={`/reports/local/${encodeURIComponent(report.id)}`}>{report.title}</Link></h3>
+                <div className="browser-report-card-actions"><Link className="evidence-link" to={`/reports/local/${encodeURIComponent(report.id)}`}><ShieldCheck aria-hidden="true" size={16} />{c.open}</Link><details><summary>{c.integrity}</summary><code>{report.reportSha256}</code></details></div>
               </article>
             ))}
           </div>
-        ) : (
-          <div className="native-today-empty"><h3>{t("today.noRuns")}</h3><p>{t("today.noRunsHelp")}</p></div>
-        )}
+        ) : <div className="native-today-empty"><h3>{c.noReports}</h3><p>{c.noReportsHelp}</p></div>}
       </section>
 
-      <section className="native-today-section" aria-labelledby="recent-vault-heading">
-        <div className="section-heading-row">
-          <div><p className="section-index">02</p><h2 id="recent-vault-heading">{t("today.recentVault")}</h2></div>
-          <Link className="evidence-link" to="/library">{t("today.openLibrary")}</Link>
-        </div>
-        {recentItems.length ? (
-          <div className="native-vault-list">
-            {recentItems.slice(0, 6).map((item) => (
-              <article key={item.id} onContextMenu={showResearchContextMenu}>
-                <span>{itemKindLabel(item.kind)} · {formatDate(item.added_at)}</span>
-                <h3>{item.title}</h3>
-                <details><summary>{t("today.integrity")}</summary><code>{item.identity_sha256}</code></details>
+      <section className="native-today-section" aria-labelledby="browser-watches-heading">
+        <div className="section-heading-row"><div><p className="section-index">02</p><h2 id="browser-watches-heading">{c.savedWatches}</h2><p>{c.watchHelp}</p></div></div>
+        {state.watches.length ? (
+          <div className="native-run-list browser-watch-list">
+            {state.watches.map((watch) => (
+              <article className="native-run-card" key={watch.id}>
+                <div><p>{c.created} · {formatDate(watch.createdAt)}</p><h3>{watch.name}</h3><span>{c.schedule}: {watch.specification.schedule?.expression ?? "—"} · {watch.specification.timezone ?? "—"}</span></div>
+                <details><summary>{c.integrity}</summary><dl><div><dt>SHA-256</dt><dd><code>{watch.specificationSha256}</code></dd></div>{reportIds.has(watch.lastReportId) && <div><dt>{c.lastReport}</dt><dd><Link to={`/reports/local/${encodeURIComponent(watch.lastReportId)}`}>{c.open}</Link></dd></div>}</dl></details>
               </article>
             ))}
           </div>
-        ) : <p className="native-today-empty">{t("today.noLibrary")}</p>}
+        ) : <p className="native-today-empty">{c.noWatches}</p>}
       </section>
     </>
-  );
-}
-
-function StudyCard({ study, index }: { study: DigestStudy; index: number }) {
-  const { locale, t } = useI18n();
-  const statusLabel = study.status === "correction" ? t("today.correction") : t("today.new");
-
-  return (
-    <article
-      className="study-card"
-      onContextMenu={showResearchContextMenu}
-    >
-      <div className="study-number" aria-hidden="true">
-        {String(index).padStart(2, "0")}
-      </div>
-      <div className="study-content">
-        <div className="study-labels">
-          <span>{localize(study.disciplineLabel, locale)}</span>
-          <span className={study.status === "correction" ? "status-label correction" : "status-label"}>
-            {study.status === "correction" ? "≠" : "+"} {statusLabel}
-          </span>
-          <span className="fixture-label">{t("today.fixture")}</span>
-        </div>
-        <h3>{localize(study.title, locale)}</h3>
-        <p className="study-summary">{localize(study.summary, locale)}</p>
-        <details className="why-details">
-          <summary>{t("today.why")}</summary>
-          <p className="study-citation">{study.authors} · {study.venue} · {localize(study.date, locale)}</p>
-          <div className="study-facts" aria-label="Study metadata">
-            <span>{localize(study.studyType, locale)}</span>
-            <span>{localize(study.evidence, locale)}</span>
-            <span>{study.relevance}% relevance</span>
-          </div>
-          <p>{localize(study.reason, locale)}</p>
-        </details>
-      </div>
-      <Link
-        className="evidence-link"
-        to={`/reports/demo/claims/${study.claimId}`}
-        aria-label={`${t("today.inspect")}: ${localize(study.title, locale)}`}
-      >
-        <ShieldCheck aria-hidden="true" size={18} />
-        {t("today.inspect")}
-      </Link>
-    </article>
   );
 }
 
@@ -1185,110 +1041,6 @@ function RadioOption({
         <b>{label}</b>
         {help && <small>{help}</small>}
       </span>
-    </label>
-  );
-}
-
-function AppearancePage() {
-  const { locale, setLocale, t } = useI18n();
-  const { theme, setTheme, motion, setMotion } = useAppearance();
-
-  return (
-    <main id="main-content" className="page appearance-page" tabIndex={-1}>
-      <header className="page-heading">
-        <p className="eyebrow">{t("appearance.eyebrow")}</p>
-        <h1>{t("appearance.title")}</h1>
-        <p className="lede">{t("appearance.lede")}</p>
-      </header>
-
-      <div className="settings-layout">
-        <div className="settings-form">
-          <fieldset className="settings-group">
-            <legend>{t("appearance.theme")}</legend>
-            <div className="choice-grid theme-grid">
-              {(["system", "light", "dark"] as ThemePreference[]).map((value) => (
-                <ChoiceCard
-                  key={value}
-                  name="theme"
-                  value={value}
-                  checked={theme === value}
-                  onChange={() => setTheme(value)}
-                  label={t(`appearance.${value}` as "appearance.system")}
-                  marker={value === "system" ? "◐" : value === "light" ? "○" : "●"}
-                />
-              ))}
-            </div>
-          </fieldset>
-
-          <fieldset className="settings-group">
-            <legend>{t("appearance.motion")}</legend>
-            <div className="choice-grid motion-grid">
-              {(["full", "reduced", "off"] as MotionPreference[]).map((value) => (
-                <ChoiceCard
-                  key={value}
-                  name="motion"
-                  value={value}
-                  checked={motion === value}
-                  onChange={() => setMotion(value)}
-                  label={t(`appearance.${value}` as "appearance.full")}
-                  help={t(`appearance.${value}Help` as "appearance.fullHelp")}
-                  marker={value === "full" ? "≡" : value === "reduced" ? "=" : "—"}
-                />
-              ))}
-            </div>
-          </fieldset>
-
-          <fieldset className="settings-group">
-            <legend>{t("appearance.language")}</legend>
-            <div className="choice-grid language-grid">
-              <ChoiceCard name="locale" value="en" checked={locale === "en"} onChange={() => setLocale("en")} label={t("app.english")} marker="En" />
-              <ChoiceCard name="locale" value="tr" checked={locale === "tr"} onChange={() => setLocale("tr")} label={t("app.turkish")} marker="Tr" />
-            </div>
-          </fieldset>
-          <p className="settings-saved" role="status"><Check aria-hidden="true" size={16} /> {t("appearance.saved")}</p>
-        </div>
-
-        <aside className="reading-preview" aria-labelledby="preview-heading">
-          <p className="section-index">A4 · 01</p>
-          <h2 id="preview-heading">{t("appearance.preview")}</h2>
-          <h3>{t("appearance.previewTitle")}</h3>
-          <p>{t("appearance.previewText")}</p>
-          <div className="preview-claim">
-            <span>C-017</span>
-            <span>■ {t("claim.verified")}</span>
-          </div>
-        </aside>
-      </div>
-    </main>
-  );
-}
-
-function ChoiceCard({
-  name,
-  value,
-  checked,
-  onChange,
-  label,
-  help,
-  marker,
-}: {
-  name: string;
-  value: string;
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  help?: string;
-  marker: string;
-}) {
-  return (
-    <label className={`choice-card${checked ? " is-selected" : ""}`}>
-      <input type="radio" name={name} value={value} checked={checked} onChange={onChange} />
-      <span className="choice-marker" aria-hidden="true">{marker}</span>
-      <span className="choice-copy">
-        <b>{label}</b>
-        {help && <small>{help}</small>}
-      </span>
-      <span className="choice-check" aria-hidden="true">{checked ? "■" : "□"}</span>
     </label>
   );
 }

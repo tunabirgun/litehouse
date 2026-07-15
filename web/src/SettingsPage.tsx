@@ -1,42 +1,44 @@
 import {
   BellRing,
+  BookOpenText,
   BrainCircuit,
   Check,
   Database,
   DownloadCloud,
   ExternalLink,
-  FileCheck2,
   FileOutput,
   Gauge,
   Keyboard,
   LockKeyhole,
+  Palette,
   RefreshCw,
   RotateCcw,
+  ServerCog,
   ShieldCheck,
   SlidersHorizontal,
+  type LucideIcon,
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { useI18n } from "./i18n";
-import {
-  nativeApi,
-  type NativePaths,
-  type NativeUpdateInfo,
-  type NativeVaultRelocationReceipt,
-  setAutoCheckEnabled,
-} from "./native";
 import {
   bindingFromKeyboardEvent,
   formatShortcut,
   useShortcuts,
 } from "./shortcuts";
+import { RemoteProviderPanel } from "./providers/RemoteProviderPanel";
+import { browserStorageStatus, listBrowserReports, type BrowserStorageStatus } from "./browser/vault";
+import { BrowserModelPanel } from "./llm/BrowserModelPanel";
+import { useAppearance, type ThemePreference, type MotionPreference } from "./appearance";
+import "./settings.css";
 
 type SettingsSection =
   | "profile"
   | "watches"
   | "sources"
   | "models"
+  | "providers"
   | "citation"
   | "appearance"
   | "storage"
@@ -54,12 +56,9 @@ interface LocalSettings {
   modelTier: "minimum" | "balanced" | "quality";
   customEndpoint: string;
   citation: string;
-  vaultPath: string;
   verifyOnOpen: boolean;
   encryptSecrets: boolean;
   encryptNotes: boolean;
-  updateChannel: "stable" | "alpha";
-  autoCheck: boolean;
 }
 
 interface LocalModelRecommendationReceipt {
@@ -238,12 +237,9 @@ const DEFAULT_SETTINGS: LocalSettings = {
   modelTier: "balanced",
   customEndpoint: "http://127.0.0.1:8080/v1",
   citation: "apa-7",
-  vaultPath: "~/Litehouse",
   verifyOnOpen: true,
   encryptSecrets: true,
   encryptNotes: false,
-  updateChannel: "alpha",
-  autoCheck: true,
 };
 
 const SETTINGS_SECTIONS: SettingsSection[] = [
@@ -251,6 +247,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   "watches",
   "sources",
   "models",
+  "providers",
   "citation",
   "appearance",
   "storage",
@@ -259,24 +256,41 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   "shortcuts",
 ];
 
+const SETTINGS_ICONS: Record<SettingsSection, LucideIcon> = {
+  profile: BookOpenText,
+  watches: BellRing,
+  sources: Database,
+  models: BrainCircuit,
+  providers: ServerCog,
+  citation: FileOutput,
+  appearance: Palette,
+  storage: ShieldCheck,
+  updates: DownloadCloud,
+  diagnostics: Gauge,
+  shortcuts: Keyboard,
+};
+
 const copy = {
   en: {
     eyebrow: "Application preferences",
     title: "Settings",
     lede: "Local-first defaults remain explicit. Changes on this screen affect future requests; completed reports keep their original revision and hashes.",
     saved: "Preferences saved on this device",
-    sectionPicker: "Settings section",
     researchGroup: "Research defaults",
-    outputGroup: "Models and output",
-    applicationGroup: "Application and data",
+    intelligenceGroup: "Intelligence",
+    outputGroup: "Output",
+    applicationGroup: "Application",
+    advancedGroup: "Advanced",
+    navigation: "Settings sections",
     section: {
-      profile: "Profile & expertise",
+      profile: "Research defaults",
       watches: "Watches & schedules",
       sources: "Sources & access",
-      models: "Models & providers",
-      citation: "Citation & export",
-      appearance: "Appearance & language",
-      storage: "Vault, privacy & encryption",
+      models: "Local AI",
+      providers: "API providers",
+      citation: "Exports & reports",
+      appearance: "Appearance",
+      storage: "Privacy & data",
       updates: "Updates",
       diagnostics: "Diagnostics",
       shortcuts: "Keyboard shortcuts",
@@ -287,8 +301,8 @@ const copy = {
     priorPlaceholder: "Methods, disciplines, terminology, or practical experience the report may assume…",
     timezone: "Default time zone (IANA)",
     perRequest: "Every guided request can override these defaults without changing your profile.",
-    watchesHelp: "Review recurring searches and their next scheduled local run.",
-    watchDemo: "Demonstration watches — packaged Litehouse shows only your local records here.",
+    watchesHelp: "Save reusable search definitions for later review. The static web alpha does not run a background scheduler.",
+    watchDemo: "Watch definitions and first-run reports stay in this browser. Start future updates manually while Litehouse is open.",
     loadingWatches: "Loading local watches…",
     watchesUnavailable: "Local watches could not be loaded. Demonstration records were not substituted.",
     noWatches: "No recurring watches have been created on this device.",
@@ -307,7 +321,8 @@ const copy = {
     noBypass: "Access controls and publisher terms are never bypassed.",
     testSources: "Test enabled sources",
     tested: "Source check queued. Results will show request receipts and sanitized failures.",
-    modelHelp: "The native app recommends a local model after probing memory, architecture, and supported acceleration.",
+    modelHelp: "Litehouse recommends a local model after measuring memory, architecture, and supported acceleration on this device.",
+    providerHelp: "Choose where report synthesis runs. External providers receive only the material you explicitly submit to them.",
     provider: "Default provider",
     tier: "Local model tier",
     endpoint: "OpenAI-compatible endpoint",
@@ -335,6 +350,7 @@ const copy = {
     modelActionError: "The local model action could not be completed safely.",
     modelInstallConfirm: "Download {{model}} and llama.cpp from their pinned sources?\n\nModel SHA-256: {{model_sha}}\nRuntime SHA-256: {{runtime_sha}}\n\nLitehouse will reject every byte that does not match these receipts.",
     installProgress: "Verified install progress",
+    verificationReceipt: "Verification receipt",
     advancedProvider: "Advanced provider configuration",
     providerModel: "Provider model identifier",
     saveProvider: "Save provider",
@@ -350,6 +366,19 @@ const copy = {
     deleteCredential: "Delete stored credential",
     credentialDeleted: "Stored credential deleted.",
     credentialError: "The credential operation could not be completed safely.",
+    browserVaultHelp: "Reports, notes, PDFs, and model caches stay in this browser profile. Litehouse has no account database or application server.",
+    browserVault: "Browser-local vault",
+    browserVaultPersistent: "Protected from routine storage eviction",
+    browserVaultBestEffort: "Best-effort browser storage",
+    browserVaultRequest: "Request durable local storage",
+    browserVaultUsage: "Origin storage",
+    browserVaultReports: "Saved reports",
+    browserVaultBackup: "Export vault backup",
+    browserVaultEncryption: "Litehouse does not claim application-level encryption for IndexedDB. Protection depends on this browser profile, device login, and disk encryption.",
+    browserVaultClear: "Clearing site data in your browser removes this vault and downloaded models. Export a backup first.",
+    webUpdateHelp: "The web alpha is delivered from the public, reviewable GitHub source. A new commit-linked site artifact with a SHA-256 manifest is deployed only after the public web verification workflow passes.",
+    webUpdateReload: "Reload the web app",
+    webUpdateSource: "View source and build history",
     saveBeforeCredential: "Save this provider before storing its credential.",
     min: "Minimum",
     balanced: "Balanced",
@@ -448,18 +477,21 @@ const copy = {
     title: "Ayarlar",
     lede: "Yerel öncelikli varsayılanlar açık kalır. Bu ekrandaki değişiklikler gelecek istekleri etkiler; tamamlanmış raporlar ilk revizyonlarını ve karmalarını korur.",
     saved: "Tercihler bu cihazda kaydedildi",
-    sectionPicker: "Ayar bölümü",
     researchGroup: "Araştırma varsayılanları",
-    outputGroup: "Modeller ve çıktı",
-    applicationGroup: "Uygulama ve veri",
+    intelligenceGroup: "Zekâ",
+    outputGroup: "Çıktı",
+    applicationGroup: "Uygulama",
+    advancedGroup: "Gelişmiş",
+    navigation: "Ayar bölümleri",
     section: {
-      profile: "Profil ve uzmanlık",
+      profile: "Araştırma varsayılanları",
       watches: "İzlemeler ve programlar",
       sources: "Kaynaklar ve erişim",
-      models: "Modeller ve sağlayıcılar",
-      citation: "Kaynakça ve dışa aktarım",
-      appearance: "Görünüm ve dil",
-      storage: "Kasa, gizlilik ve şifreleme",
+      models: "Yerel yapay zekâ",
+      providers: "API sağlayıcıları",
+      citation: "Dışa aktarım ve raporlar",
+      appearance: "Görünüm",
+      storage: "Gizlilik ve veriler",
       updates: "Güncellemeler",
       diagnostics: "Tanılama",
       shortcuts: "Klavye kısayolları",
@@ -470,8 +502,8 @@ const copy = {
     priorPlaceholder: "Raporun bilindiğini varsayabileceği yöntemler, alanlar, terminoloji veya uygulama deneyimi…",
     timezone: "Varsayılan saat dilimi (IANA)",
     perRequest: "Her yönlendirmeli istek bu varsayılanları profilinizi değiştirmeden geçersiz kılabilir.",
-    watchesHelp: "Yinelenen taramaları ve sonraki yerel çalışma saatlerini inceleyin.",
-    watchDemo: "Gösterim izlemeleri — paketlenmiş Litehouse burada yalnızca yerel kayıtlarınızı gösterir.",
+    watchesHelp: "Daha sonra incelemek üzere yeniden kullanılabilir arama tanımları kaydedin. Statik web alfa arka planda zamanlayıcı çalıştırmaz.",
+    watchDemo: "İzleme tanımları ve ilk çalışma raporları bu tarayıcıda kalır. Sonraki güncellemeleri Litehouse açıkken elle başlatın.",
     loadingWatches: "Yerel izlemeler yükleniyor…",
     watchesUnavailable: "Yerel izlemeler yüklenemedi. Gösterim kayıtları bunların yerine kullanılmadı.",
     noWatches: "Bu cihazda henüz yinelenen izleme oluşturulmadı.",
@@ -490,7 +522,8 @@ const copy = {
     noBypass: "Erişim denetimleri ve yayıncı koşulları aşılmaz.",
     testSources: "Etkin kaynakları sına",
     tested: "Kaynak denetimi sıraya alındı. Sonuçlar istek makbuzlarını ve temizlenmiş hataları gösterecek.",
-    modelHelp: "Yerel uygulama belleği, mimariyi ve desteklenen hızlandırmayı ölçtükten sonra yerel model önerir.",
+    modelHelp: "Litehouse bu cihazdaki belleği, mimariyi ve desteklenen hızlandırmayı ölçtükten sonra yerel model önerir.",
+    providerHelp: "Rapor sentezinin nerede çalışacağını seçin. Dış sağlayıcılar yalnızca açıkça gönderdiğiniz içeriği alır.",
     provider: "Varsayılan sağlayıcı",
     tier: "Yerel model düzeyi",
     endpoint: "OpenAI uyumlu uç nokta",
@@ -518,6 +551,7 @@ const copy = {
     modelActionError: "Yerel model işlemi güvenli biçimde tamamlanamadı.",
     modelInstallConfirm: "{{model}} ve llama.cpp sabitlenmiş kaynaklarından indirilsin mi?\n\nModel SHA-256: {{model_sha}}\nÇalışma zamanı SHA-256: {{runtime_sha}}\n\nLitehouse bu makbuzlarla eşleşmeyen her baytı reddeder.",
     installProgress: "Doğrulanmış kurulum ilerlemesi",
+    verificationReceipt: "Doğrulama makbuzu",
     advancedProvider: "Gelişmiş sağlayıcı yapılandırması",
     providerModel: "Sağlayıcı model tanımlayıcısı",
     saveProvider: "Sağlayıcıyı kaydet",
@@ -533,6 +567,19 @@ const copy = {
     deleteCredential: "Saklanmış kimlik bilgisini sil",
     credentialDeleted: "Saklanmış kimlik bilgisi silindi.",
     credentialError: "Kimlik bilgisi işlemi güvenli biçimde tamamlanamadı.",
+    browserVaultHelp: "Raporlar, notlar, PDF'ler ve model önbellekleri bu tarayıcı profilinde kalır. Litehouse'ın hesap veritabanı veya uygulama sunucusu yoktur.",
+    browserVault: "Tarayıcı-yerel kasa",
+    browserVaultPersistent: "Olağan depolama temizliğine karşı korunuyor",
+    browserVaultBestEffort: "En iyi çaba tarayıcı depolaması",
+    browserVaultRequest: "Kalıcı yerel depolama iste",
+    browserVaultUsage: "Kaynak depolaması",
+    browserVaultReports: "Kayıtlı raporlar",
+    browserVaultBackup: "Kasa yedeğini dışa aktar",
+    browserVaultEncryption: "Litehouse, IndexedDB için uygulama düzeyinde şifreleme iddiasında bulunmaz. Koruma tarayıcı profiline, cihaz oturumuna ve disk şifrelemesine bağlıdır.",
+    browserVaultClear: "Tarayıcıda site verilerini temizlemek bu kasayı ve indirilen modelleri siler. Önce yedek alın.",
+    webUpdateHelp: "Web alfa, herkese açık ve incelenebilir GitHub kaynağından sunulur. SHA-256 bildirimi olan, commit'e bağlı yeni site eseri yalnızca herkese açık web doğrulama iş akışı geçtikten sonra yayımlanır.",
+    webUpdateReload: "Web uygulamasını yenile",
+    webUpdateSource: "Kaynağı ve derleme geçmişini görüntüle",
     saveBeforeCredential: "Kimlik bilgisini saklamadan önce bu sağlayıcıyı kaydedin.",
     min: "Asgari",
     balanced: "Dengeli",
@@ -641,8 +688,9 @@ export function SettingsPage() {
   const { locale } = useI18n();
   const c = copy[locale];
   const location = useLocation();
+  const navigate = useNavigate();
   const requestedSection = new URLSearchParams(location.search).get("section") as SettingsSection | null;
-  const [section, setSection] = useState<SettingsSection>(requestedSection && SETTINGS_SECTIONS.includes(requestedSection) ? requestedSection : "profile");
+  const section: SettingsSection = requestedSection && SETTINGS_SECTIONS.includes(requestedSection) ? requestedSection : "profile";
   const [settings, setSettings] = useState<LocalSettings>(readSettings);
   const [status, setStatus] = useState("");
 
@@ -655,10 +703,18 @@ export function SettingsPage() {
   }
 
   function chooseSection(next: SettingsSection) {
-    setSection(next);
     setStatus("");
-    window.history.replaceState(null, "", `/settings?section=${next}`);
+    void navigate({ pathname: "/settings", search: `?section=${next}` }, { replace: true });
   }
+
+  const groups = [
+    { id: "research", label: c.researchGroup, sections: ["profile", "watches", "sources"] as SettingsSection[] },
+    { id: "intelligence", label: c.intelligenceGroup, sections: ["models", "providers"] as SettingsSection[] },
+    { id: "output", label: c.outputGroup, sections: ["citation"] as SettingsSection[] },
+    { id: "application", label: c.applicationGroup, sections: ["appearance", "storage"] as SettingsSection[] },
+    { id: "advanced", label: c.advancedGroup, sections: ["updates", "diagnostics", "shortcuts"] as SettingsSection[] },
+  ];
+  const activeGroup = groups.find((group) => group.sections.includes(section));
 
   return (
     <main id="main-content" className="page lh-settings-page" tabIndex={-1}>
@@ -669,27 +725,40 @@ export function SettingsPage() {
         <p className="lh-autosave"><Check aria-hidden="true" size={15} />{c.saved}</p>
       </header>
       <div className="lh-settings-shell">
-        <label className="lh-settings-picker">
-          <span>{c.sectionPicker}</span>
-          <select value={section} onChange={(event) => chooseSection(event.target.value as SettingsSection)}>
-            <optgroup label={c.researchGroup}>
-              {(["profile", "watches", "sources"] as SettingsSection[]).map((key) => <option key={key} value={key}>{c.section[key]}</option>)}
-            </optgroup>
-            <optgroup label={c.outputGroup}>
-              {(["models", "citation"] as SettingsSection[]).map((key) => <option key={key} value={key}>{c.section[key]}</option>)}
-            </optgroup>
-            <optgroup label={c.applicationGroup}>
-              {(["appearance", "storage", "updates", "diagnostics", "shortcuts"] as SettingsSection[]).map((key) => <option key={key} value={key}>{c.section[key]}</option>)}
-            </optgroup>
-          </select>
-        </label>
-        <section className="lh-settings-panel" aria-labelledby={`settings-${section}`}>
-          <p className="section-index">{String(SETTINGS_SECTIONS.indexOf(section) + 1).padStart(2, "0")}</p>
-          <h2 id={`settings-${section}`}>{c.section[section]}</h2>
+        <nav className="lh-settings-nav" aria-label={c.navigation}>
+          {groups.map((group) => (
+            <div className="lh-settings-nav-group" key={group.id}>
+              <p id={`settings-group-${group.id}`}>{group.label}</p>
+              <div aria-labelledby={`settings-group-${group.id}`}>
+                {group.sections.map((key) => {
+                  const Icon = SETTINGS_ICONS[key];
+                  return (
+                    <button
+                      aria-controls="settings-panel"
+                      aria-current={section === key ? "page" : undefined}
+                      key={key}
+                      onClick={() => chooseSection(key)}
+                      type="button"
+                    >
+                      <Icon aria-hidden="true" />
+                      <span>{c.section[key]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
+        <section className="lh-settings-panel" id="settings-panel" aria-labelledby={`settings-heading-${section}`} key={section}>
+          <header className="lh-settings-panel-heading">
+            <p>{activeGroup?.label}</p>
+            <h2 id={`settings-heading-${section}`}>{c.section[section]}</h2>
+          </header>
           {section === "profile" && <ProfileSettings c={c} settings={settings} update={update} />}
           {section === "watches" && <WatchSettings c={c} locale={locale} />}
           {section === "sources" && <SourceSettings c={c} settings={settings} update={update} />}
-          {section === "models" && <ModelSettings c={c} settings={settings} update={update} setStatus={setStatus} />}
+          {section === "models" && <ModelSettings c={c} settings={settings} update={update} setStatus={setStatus} mode="local" />}
+          {section === "providers" && <ModelSettings c={c} settings={settings} update={update} setStatus={setStatus} mode="providers" />}
           {section === "citation" && <CitationSettings c={c} settings={settings} update={update} setStatus={setStatus} />}
           {section === "appearance" && <AppearanceSettings c={c} />}
           {section === "storage" && <StorageSettings c={c} />}
@@ -710,74 +779,8 @@ function ProfileSettings({ c, settings, update }: { c: SettingsCopy; settings: L
   return <div className="lh-settings-content"><p className="lh-section-help">{c.profileHelp}</p><div className="lh-two-fields compact"><label className="lh-field"><span>{c.primaryExpertise}</span><select value={settings.expertise} onChange={(event) => update("expertise", event.target.value)}><option value="undergraduate">Undergraduate</option><option value="masters">Master's</option><option value="doctoral">Doctoral</option><option value="postdoctoral">Postdoctoral</option><option value="faculty">Faculty</option><option value="professional">Professional</option><option value="independent">Independent researcher</option></select></label><label className="lh-field"><span>{c.timezone}</span><input value={settings.defaultTimezone} onChange={(event) => update("defaultTimezone", event.target.value)} /></label></div><label className="lh-field"><span>{c.priorKnowledge}</span><textarea rows={7} maxLength={4000} placeholder={c.priorPlaceholder} value={settings.priorKnowledge} onChange={(event) => update("priorKnowledge", event.target.value)} /><small>{settings.priorKnowledge.length}/4000</small></label><p className="lh-info-strip"><SlidersHorizontal aria-hidden="true" size={17} />{c.perRequest}</p></div>;
 }
 
-function WatchSettings({ c, locale }: { c: SettingsCopy; locale: "en" | "tr" }) {
-  const [state, setState] = useState<
-    | { kind: "loading" }
-    | { kind: "error" }
-    | { kind: "ready"; watches: NativeWatchReceipt[]; runs: NativeRunReceipt[] }
-  >({ kind: "loading" });
-
-  useEffect(() => {
-    if (!nativeApi.available) return;
-    let active = true;
-    void Promise.all([
-      nativeApi.request<NativeWatchReceipt[]>("GET", "/v1/watches"),
-      nativeApi.request<NativeRunReceipt[]>("GET", "/v1/runs?limit=50"),
-    ]).then(([watches, runs]) => {
-      if (!active) return;
-      if (watches.status !== 200 || runs.status !== 200 || !Array.isArray(watches.body) || !Array.isArray(runs.body)) {
-        setState({ kind: "error" });
-        return;
-      }
-      setState({ kind: "ready", watches: watches.body, runs: runs.body });
-    }).catch(() => active && setState({ kind: "error" }));
-    return () => { active = false; };
-  }, []);
-
-  if (!nativeApi.available) {
-    return <div className="lh-settings-content"><p className="lh-section-help">{c.watchesHelp}</p><p className="lh-demo-label">{c.watchDemo}</p><div className="lh-watch-list"><SettingsWatch title="Molecular interaction prediction" schedule="Daily · 07:30 · Europe/Istanbul" next="16 Jul · 07:30" active c={c} /><SettingsWatch title="Environmental humanities" schedule="Weekly · Monday · 09:00" next="—" active={false} c={c} /></div><Link className="button button-primary" to="/reports/new"><BellRing aria-hidden="true" size={17} />{c.newWatch}</Link></div>;
-  }
-
-  return (
-    <div className="lh-settings-content">
-      <p className="lh-section-help">{c.watchesHelp}</p>
-      {state.kind === "loading" && <p className="lh-settings-state" role="status">{c.loadingWatches}</p>}
-      {state.kind === "error" && <p className="lh-settings-state is-error" role="alert">{c.watchesUnavailable}</p>}
-      {state.kind === "ready" && state.watches.length === 0 && <p className="lh-settings-state">{c.noWatches}</p>}
-      {state.kind === "ready" && state.watches.length > 0 && (
-        <div className="lh-watch-list">
-          {state.watches.map((watch) => {
-            const matchingRuns = state.runs.filter((run) => run.watch_revision_id === watch.active_revision.id);
-            const queuedRun = matchingRuns
-              .filter((run) => run.status === "queued")
-              .sort((left, right) => Date.parse(left.scheduled_at) - Date.parse(right.scheduled_at))[0];
-            const recentRun = matchingRuns
-              .sort((left, right) => Date.parse(right.scheduled_at) - Date.parse(left.scheduled_at))[0];
-            const schedule = watch.active_revision.specification.schedule;
-            const scheduleLabel = schedule.kind === "cron"
-              ? `Cron ${schedule.expression} · ${watch.active_revision.specification.timezone}`
-              : `${schedule.every} ${schedule.unit} · ${watch.active_revision.specification.timezone}`;
-            const formatDate = (value: string) => new Intl.DateTimeFormat(locale === "tr" ? "tr-TR" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-            return (
-              <SettingsWatch
-                key={watch.id}
-                title={watch.name}
-                schedule={scheduleLabel}
-                next={queuedRun ? formatDate(queuedRun.scheduled_at) : c.noNextRun}
-                active={watch.enabled}
-                c={c}
-                revision={watch.active_revision.number}
-                specificationSha={watch.active_revision.specification_sha256}
-                recentRun={recentRun ? `${recentRun.status} · ${formatDate(recentRun.scheduled_at)}` : "—"}
-                sourceErrors={recentRun?.source_error_count ?? 0}
-              />
-            );
-          })}
-        </div>
-      )}
-      <Link className="button button-primary" to="/reports/new"><BellRing aria-hidden="true" size={17} />{c.newWatch}</Link>
-    </div>
-  );
+function WatchSettings({ c }: { c: SettingsCopy; locale: "en" | "tr" }) {
+  return <div className="lh-settings-content"><p className="lh-section-help">{c.watchesHelp}</p><p className="lh-demo-label">{c.watchDemo}</p><Link className="button button-primary" to="/reports/new"><BellRing aria-hidden="true" size={17} />{c.newWatch}</Link></div>;
 }
 
 function SettingsWatch({ title, schedule, next, active, c, revision, specificationSha, recentRun, sourceErrors }: { title: string; schedule: string; next: string; active: boolean; c: SettingsCopy; revision?: number; specificationSha?: string; recentRun?: string; sourceErrors?: number }) {
@@ -785,567 +788,184 @@ function SettingsWatch({ title, schedule, next, active, c, revision, specificati
 }
 
 function SourceSettings({ c, settings, update }: { c: SettingsCopy; settings: LocalSettings; update: SettingsUpdate }) {
-  const sources = [["openalex", "OpenAlex"], ["crossref", "Crossref"], ["datacite", "DataCite"], ["europe-pmc", "Europe PMC"], ["semantic-scholar", "Semantic Scholar"], ["library-of-congress", "Library of Congress"]] as const;
+  const sources = [["openalex", "OpenAlex"], ["crossref", "Crossref"], ["datacite", "DataCite"], ["europe-pmc", "Europe PMC"], ["semantic-scholar", "Semantic Scholar"]] as const;
   return <div className="lh-settings-content"><p className="lh-section-help">{c.sourceHelp}</p><div className="lh-source-grid">{sources.map(([id, label]) => <label className="lh-switch-row" key={id}><span><Database aria-hidden="true" size={16} /><b>{label}</b><small>HTTPS · JSON · receipt</small></span><input type="checkbox" role="switch" checked={settings.sources[id]} onChange={(event) => update("sources", { ...settings.sources, [id]: event.target.checked })} /></label>)}</div><label className="lh-switch-row lh-wide-switch"><span><ShieldCheck aria-hidden="true" size={17} /><b>{c.oaDefault}</b><small>{c.oaHelp}</small></span><input type="checkbox" role="switch" checked={settings.openOnly} onChange={(event) => update("openOnly", event.target.checked)} /></label><p className="lh-safety-note"><LockKeyhole aria-hidden="true" size={18} />{c.noBypass}</p></div>;
 }
 
-function ModelSettings({ c, settings, update, setStatus }: { c: SettingsCopy; settings: LocalSettings; update: SettingsUpdate; setStatus: (status: string) => void }) {
-  const [system, setSystem] = useState<LocalModelRecommendationReceipt | null>(null);
-  const [job, setJob] = useState<LocalModelInstallReceipt | null>(null);
-  const [server, setServer] = useState<LocalModelServerReceipt | null>(null);
-  const [providerSettings, setProviderSettings] = useState<ProviderSettingsReceipt | null>(null);
-  const [providerModel, setProviderModel] = useState("");
-  const [credential, setCredential] = useState("");
-  const [measuring, setMeasuring] = useState(false);
-  const [acting, setActing] = useState(false);
-  const [providerActing, setProviderActing] = useState(false);
+type ModelSettingsProps = { c: SettingsCopy; settings: LocalSettings; update: SettingsUpdate; setStatus: (status: string) => void; mode: "local" | "providers" };
 
-  async function measureSystem() {
-    if (!nativeApi.available || measuring) {
-      setStatus(c.nativeRequired);
-      return;
-    }
-    setMeasuring(true);
-    try {
-      const response = await nativeApi.request<LocalModelRecommendationReceipt>(
-        "GET",
-        "/v1/local-model/recommendation",
-      );
-      if (
-        response.status !== 200
-        || !isLocalModelRecommendationReceipt(response.body)
-      ) throw new Error("capability measurement rejected");
-      setSystem(response.body);
-      const statusResponse = await nativeApi.request<LocalModelStatusReceipt>(
-        "GET",
-        "/v1/local-model/status",
-      );
-      if (statusResponse.status === 200) {
-        setJob(statusResponse.body.install);
-        setServer(statusResponse.body.server);
-      }
-      setStatus(c.systemMeasured);
-    } catch {
-      setStatus(c.systemUnavailable);
-    } finally {
-      setMeasuring(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!nativeApi.available) return;
-    void measureSystem();
-    void loadProviderSettings();
-  // The native capability result is intentionally refreshed when this section mounts.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!nativeApi.available || !job || !ACTIVE_MODEL_INSTALL_STATES.has(job.state)) return;
-    let disposed = false;
-    let timer: number | undefined;
-    const jobId = job.job_id;
-    async function poll() {
-      try {
-        const response = await nativeApi.request<LocalModelInstallReceipt>(
-          "GET",
-          `/v1/local-model/install/${jobId}`,
-        );
-        if (disposed || response.status !== 200) return;
-        setJob(response.body);
-        if (response.body.state === "ready") setStatus(c.localModelReady);
-        if (response.body.state === "failed") setStatus(c.modelActionError);
-        if (response.body.state === "cancelled") setStatus(c.modelStopped);
-        if (ACTIVE_MODEL_INSTALL_STATES.has(response.body.state)) {
-          timer = window.setTimeout(poll, 600);
-        }
-      } catch {
-        if (!disposed) setStatus(c.modelActionError);
-      }
-    }
-    timer = window.setTimeout(poll, 300);
-    return () => {
-      disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [c.localModelReady, c.modelActionError, c.modelStopped, job?.job_id, job?.state, setStatus]);
-
-  const selected = system?.options.find(({ tier }) => tier === settings.modelTier);
-  const modelFile = selected ? `${(selected.model.size / 1024 ** 3).toFixed(2)} GiB` : null;
-  const measuredSummary = selected
-    ? `${selected.model.model_id} · ${selected.quantization} · ${modelFile ?? "—"}`
-    : c.recommendationText;
-  const installing = job ? ACTIVE_MODEL_INSTALL_STATES.has(job.state) : false;
-  const ready = job?.state === "ready";
-
-  async function installLocalModel() {
-    if (!nativeApi.available || !selected || !system || acting || !selected.installable) {
-      setStatus(nativeApi.available ? c.modelActionError : c.nativeRequired);
-      return;
-    }
-    const prompt = c.modelInstallConfirm
-      .replace("{{model}}", selected.model.model_id)
-      .replace("{{model_sha}}", selected.model.sha256)
-      .replace("{{runtime_sha}}", system.runtime.archive_sha256);
-    if (!window.confirm(prompt)) return;
-    setActing(true);
-    setStatus(c.installingModel);
-    try {
-      const response = await nativeApi.request<LocalModelInstallReceipt>(
-        "POST",
-        "/v1/local-model/install",
-        {
-          tier: selected.tier,
-          approved_model_sha256: selected.model.sha256,
-          approved_runtime_sha256: system.runtime.archive_sha256,
-        },
-      );
-      if (response.status !== 202) throw new Error("model install rejected");
-      setJob(response.body);
-    } catch {
-      setStatus(c.modelActionError);
-    } finally {
-      setActing(false);
-    }
-  }
-
-  async function cancelInstall() {
-    if (!nativeApi.available || !job || acting) return;
-    setActing(true);
-    setStatus(c.cancellingModelInstall);
-    try {
-      const response = await nativeApi.request<LocalModelInstallReceipt>(
-        "POST",
-        `/v1/local-model/install/${job.job_id}/cancel`,
-      );
-      if (response.status !== 202) throw new Error("model cancellation rejected");
-      setJob(response.body);
-    } catch {
-      setStatus(c.modelActionError);
-    } finally {
-      setActing(false);
-    }
-  }
-
-  async function setServerRunning(running: boolean) {
-    if (!nativeApi.available || acting) return;
-    setActing(true);
-    setStatus(running ? c.startingModel : c.stoppingModel);
-    try {
-      const response = await nativeApi.request<LocalModelServerReceipt>(
-        "POST",
-        running ? "/v1/local-model/server/start" : "/v1/local-model/server/stop",
-      );
-      if (response.status !== 200) throw new Error("model server action rejected");
-      setServer(response.body);
-      setStatus(response.body.running ? c.modelRunning : c.modelStopped);
-    } catch {
-      setStatus(c.modelActionError);
-    } finally {
-      setActing(false);
-    }
-  }
-
-  async function loadProviderSettings() {
-    if (!nativeApi.available) return;
-    try {
-      const response = await nativeApi.request<ProviderSettingsReceipt>(
-        "GET",
-        "/v1/model-provider",
-      );
-      if (response.status !== 200) throw new Error("provider settings rejected");
-      setProviderSettings(response.body);
-      update("provider", response.body.provider);
-      update("customEndpoint", response.body.base_url ?? "");
-      setProviderModel(response.body.model ?? "");
-    } catch {
-      setStatus(c.providerError);
-    }
-  }
-
-  function chooseProvider(provider: LocalSettings["provider"]) {
-    const defaults = PROVIDER_DEFAULTS[provider];
-    update("provider", provider);
-    update("customEndpoint", defaults.baseUrl);
-    setProviderModel(defaults.model);
-    setCredential("");
-  }
-
-  async function saveProvider() {
-    if (!nativeApi.available || providerActing) {
-      setStatus(c.nativeRequired);
-      return;
-    }
-    const defaults = PROVIDER_DEFAULTS[settings.provider];
-    const body = settings.provider === "integrated"
-      ? { provider: "integrated" }
-      : {
-          provider: settings.provider,
-          base_url: settings.customEndpoint.trim(),
-          model: providerModel.trim(),
-          display_name: defaults.displayName,
-        };
-    setProviderActing(true);
-    setStatus(c.savingProvider);
-    try {
-      const response = await nativeApi.request<ProviderSettingsReceipt>(
-        "POST",
-        "/v1/model-provider/config",
-        body,
-      );
-      if (response.status !== 200) throw new Error("provider configuration rejected");
-      setProviderSettings(response.body);
-      setStatus(c.providerSaved);
-    } catch {
-      setStatus(c.providerError);
-    } finally {
-      setProviderActing(false);
-    }
-  }
-
-  async function storeCredential() {
-    if (!nativeApi.available || providerActing || !credential) return;
-    if (providerSettings?.provider !== settings.provider) {
-      setStatus(c.saveBeforeCredential);
-      return;
-    }
-    setProviderActing(true);
-    setStatus(c.storingCredential);
-    try {
-      const response = await nativeApi.request<ProviderSettingsReceipt>(
-        "POST",
-        "/v1/model-provider/secret",
-        { provider: settings.provider, secret: credential },
-      );
-      if (response.status !== 200) throw new Error("credential store rejected");
-      setProviderSettings(response.body);
-      setStatus(c.credentialStored);
-    } catch {
-      setStatus(c.credentialError);
-    } finally {
-      setCredential("");
-      setProviderActing(false);
-    }
-  }
-
-  async function deleteCredential() {
-    if (!nativeApi.available || providerActing) return;
-    setProviderActing(true);
-    try {
-      const response = await nativeApi.request<ProviderSettingsReceipt>(
-        "POST",
-        "/v1/model-provider/secret/delete",
-        { provider: settings.provider },
-      );
-      if (response.status !== 200) throw new Error("credential delete rejected");
-      setProviderSettings(response.body);
-      setStatus(c.credentialDeleted);
-    } catch {
-      setStatus(c.credentialError);
-    } finally {
-      setProviderActing(false);
-    }
-  }
-
-  const needsCredential = ["openai", "anthropic", "gemini", "custom"].includes(settings.provider);
-  const fixedProviderEndpoint = ["openai", "anthropic", "gemini"].includes(settings.provider);
-  const credentialLabel = providerSettings?.credential_state === "stored"
-    ? c.credentialStored
-    : providerSettings?.credential_state === "unavailable"
-      ? c.credentialUnavailable
-      : c.credentialMissing;
-
-  return (
-    <div className="lh-settings-content">
-      <p className="lh-section-help">{c.modelHelp}</p>
-      <div className="lh-model-recommendation">
-        <div>
-          <p className="eyebrow">{c.recommendation}</p>
-          <h3>{measuredSummary}</h3>
-          <p>{selected?.reasons[0] ?? c.recHelp}</p>
-          {selected && (
-            <small>
-              {selected.model.license_spdx} · {selected.model.publisher}
-            </small>
-          )}
-        </div>
-        <ShieldCheck aria-hidden="true" size={30} />
-      </div>
-      {installing && job && <div className="lh-install-progress" role="status"><label htmlFor="model-install-progress">{c.installProgress}</label><progress id="model-install-progress" max={1} value={job.progress_fraction} /><small>{Math.round(job.progress_fraction * 100)}% · {(job.downloaded_bytes / 1024 ** 2).toFixed(0)} / {(job.total_bytes / 1024 ** 2).toFixed(0)} MiB</small></div>}
-      <div className="lh-inline-actions">
-        {installing ? (
-          <button className="button button-secondary" type="button" disabled={acting || job?.state === "cancelling"} onClick={cancelInstall}>{c.cancelModelInstall}</button>
-        ) : !ready ? (
-          <button className="button button-primary" type="button" disabled={acting || measuring || !selected?.installable} onClick={installLocalModel}><DownloadCloud aria-hidden="true" size={17} />{c.installModel}</button>
-        ) : server?.running ? (
-          <button className="button button-secondary" type="button" disabled={acting} onClick={() => setServerRunning(false)}>{c.stopModel}</button>
-        ) : (
-          <button className="button button-primary" type="button" disabled={acting} onClick={() => setServerRunning(true)}><BrainCircuit aria-hidden="true" size={17} />{c.startModel}</button>
-        )}
-        <button className="button button-secondary" type="button" disabled={measuring || acting} onClick={measureSystem}><RefreshCw aria-hidden="true" size={17} /><span className="sr-only">{c.measureSystem}</span></button>
-      </div>
-      <details className="lh-settings-disclosure">
-        <summary>{c.advancedProvider}</summary>
-        <fieldset className="lh-fieldset">
-          <legend>{c.tier}</legend>
-          <div className="lh-card-choices three-column">
-            {(["minimum", "balanced", "quality"] as const).map((tier) => {
-              const measured = system?.options.find((item) => item.tier === tier);
-              return <label key={tier} className={`lh-option-card${settings.modelTier === tier ? " is-selected" : ""}`}><input type="radio" name="model-tier" checked={settings.modelTier === tier} onChange={() => update("modelTier", tier)} /><span className="lh-option-mark" aria-hidden="true">{settings.modelTier === tier ? "■" : "□"}</span><span><b>{tier === "minimum" ? c.min : tier === "balanced" ? c.balanced : c.quality}</b><small>{measured ? `${measured.model.model_id} · ${(measured.estimated_working_set_bytes / 1024 ** 3).toFixed(1)} GiB` : tier === "minimum" ? "1–2 GB" : tier === "balanced" ? "3–6 GB" : "8+ GB"}</small></span></label>;
-            })}
-          </div>
-        </fieldset>
-        {selected && <p className="lh-provider-receipt">SHA-256 {selected.model.sha256}<br />llama.cpp SHA-256 {system?.runtime.archive_sha256}</p>}
-        <div className="lh-two-fields compact">
-          <label className="lh-field"><span>{c.provider}</span><select value={settings.provider} onChange={(event) => chooseProvider(event.target.value as LocalSettings["provider"])}><option value="integrated">Integrated llama.cpp</option><option value="local-compatible">Other local endpoint</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option><option value="custom">Custom compatible API</option></select></label>
-          {settings.provider !== "integrated" && <label className="lh-field"><span>{c.endpoint}</span><input value={settings.customEndpoint} disabled={fixedProviderEndpoint} onChange={(event) => update("customEndpoint", event.target.value)} /></label>}
-        </div>
-        {settings.provider !== "integrated" && <label className="lh-field"><span>{c.providerModel}</span><input value={providerModel} autoComplete="off" spellCheck={false} onChange={(event) => setProviderModel(event.target.value)} /></label>}
-        <div className="lh-inline-actions"><button className="button button-secondary" type="button" disabled={providerActing || (settings.provider !== "integrated" && (!providerModel.trim() || !settings.customEndpoint.trim()))} onClick={saveProvider}>{c.saveProvider}</button></div>
-        {needsCredential && <div className="lh-provider-credential"><p className={`lh-credential-state ${providerSettings?.credential_state ?? "missing"}`}><LockKeyhole aria-hidden="true" size={16} />{credentialLabel}</p><label className="lh-field"><span>{c.credential}</span><input type="password" value={credential} autoComplete="new-password" spellCheck={false} onChange={(event) => setCredential(event.target.value)} /></label><div className="lh-inline-actions"><button className="button button-secondary" type="button" disabled={providerActing || !credential} onClick={storeCredential}>{c.storeCredential}</button>{providerSettings?.provider === settings.provider && providerSettings.credential_state === "stored" && <button className="button button-secondary" type="button" disabled={providerActing} onClick={deleteCredential}>{c.deleteCredential}</button>}</div></div>}
-      </details>
-      {system && (
-        <p className="lh-info-strip">
-          <Gauge aria-hidden="true" size={17} />
-          {system.runtime.operating_system} · {system.runtime.architecture} · {system.runtime.available_backends.join(" / ")}
-        </p>
-      )}
-      <p className="lh-info-strip"><LockKeyhole aria-hidden="true" size={17} />{c.secrets}</p>
-      <p className="lh-safety-note"><ShieldCheck aria-hidden="true" size={18} />{c.downloadConsent}</p>
-    </div>
-  );
+function ModelSettings(props: ModelSettingsProps) {
+  return props.mode === "local"
+    ? <div className="lh-settings-content"><p className="lh-section-help">{props.c.modelHelp}</p><BrowserModelPanel onReadyChange={(ready) => { if (ready) props.setStatus("Private browser model ready for evidence-bounded synthesis."); }} /></div>
+    : <RemoteProviderPanel onStatus={props.setStatus} />;
 }
 
-function CitationSettings({ c, settings, update, setStatus }: { c: SettingsCopy; settings: LocalSettings; update: SettingsUpdate; setStatus: (status: string) => void }) {
-  const [runtime, setRuntime] = useState<TectonicRuntimeReceipt | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [installing, setInstalling] = useState(false);
-
-  async function checkRuntime() {
-    if (!nativeApi.available || checking) {
-      setStatus(c.nativeRequired);
-      return;
-    }
-    setChecking(true);
-    try {
-      const response = await nativeApi.request<TectonicRuntimeReceipt>(
-        "GET",
-        "/v1/system/latex-runtime",
-      );
-      if (response.status !== 200) throw new Error("runtime status rejected");
-      setRuntime(response.body);
-      setStatus(response.body.ready ? c.compilerInstalled : c.latexNotReady);
-    } catch {
-      setStatus(c.compilerError);
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  async function installRuntime() {
-    if (!nativeApi.available || installing) {
-      setStatus(c.nativeRequired);
-      return;
-    }
-    const version = runtime?.version ?? "0.16.9";
-    if (!window.confirm(c.compilerConfirm.replace("{{version}}", version))) return;
-    setInstalling(true);
-    setStatus(c.installingCompiler);
-    try {
-      const response = await nativeApi.request<TectonicRuntimeReceipt>(
-        "POST",
-        "/v1/system/latex-runtime",
-        { confirmed: true },
-      );
-      if (response.status !== 200 || !response.body.ready) throw new Error("runtime install rejected");
-      setRuntime(response.body);
-      setStatus(c.compilerInstalled);
-    } catch {
-      setStatus(c.compilerError);
-    } finally {
-      setInstalling(false);
-    }
-  }
-
+function CitationSettings({ c, settings, update }: { c: SettingsCopy; settings: LocalSettings; update: SettingsUpdate; setStatus: (status: string) => void }) {
   return (
     <div className="lh-settings-content">
       <p className="lh-section-help">{c.citeHelp}</p>
       <label className="lh-field"><span>{c.citation}</span><select value={settings.citation} onChange={(event) => update("citation", event.target.value)}><option value="apa-7">APA 7</option><option value="ieee">IEEE</option><option value="chicago-author-date">Chicago author–date</option><option value="mla-9">MLA 9</option><option value="vancouver">Vancouver</option><option value="harvard-cite-them-right">Harvard Cite Them Right</option></select></label>
-      <details className="lh-settings-disclosure lh-compiler-disclosure">
-        <summary>{c.latexRuntime}</summary>
-        <section className="lh-model-recommendation" aria-labelledby="latex-runtime-status">
-          <div>
-            <h3 id="latex-runtime-status">{runtime?.ready ? c.latexReady : c.latexNotReady}</h3>
-            <p>{c.compilerCaveat}</p>
-            {runtime?.archive_sha256 && <small>Tectonic {runtime.version} · SHA-256 {runtime.archive_sha256.slice(0, 16)}…{runtime.emulated ? " · x64 emulation" : ""}</small>}
-          </div>
-          <FileCheck2 aria-hidden="true" size={30} />
-        </section>
-        <div className="lh-inline-actions">
-          <button className="button button-secondary" type="button" disabled={checking || installing} onClick={checkRuntime}>{c.checkCompiler}</button>
-          {!runtime?.ready && <button className="button button-primary" type="button" disabled={checking || installing} onClick={installRuntime}>{installing ? c.installingCompiler : c.installCompiler}</button>}
-        </div>
-      </details>
     </div>
   );
 }
 
+const THEME_CHOICES: ReadonlyArray<[ThemePreference, string, string]> = [
+  ["system", "System", "Follow the operating system"],
+  ["light", "Reading room", "Warm parchment, ink text"],
+  ["dark", "Night watch", "Low-light reading surface"],
+];
+
+const MOTION_CHOICES: ReadonlyArray<[MotionPreference, string, string]> = [
+  ["full", "Full", "Transitions and thematic motion"],
+  ["reduced", "Reduced", "Only essential state changes"],
+  ["off", "Off", "No animation"],
+];
+
 function AppearanceSettings({ c }: { c: SettingsCopy }) {
-  return <div className="lh-settings-content"><p className="lh-section-help">{c.appearanceHelp}</p><div className="lh-appearance-link"><span aria-hidden="true">Aa</span><div><h3>{c.appearanceSummary}</h3><p>EB Garamond · Source Sans 3 · light / dark / system · full / reduced / off</p></div><Link className="button button-secondary" to="/settings/appearance">{c.appearanceLink}<ExternalLink aria-hidden="true" size={16} /></Link></div></div>;
+  const { theme, setTheme, motion, setMotion } = useAppearance();
+  return (
+    <div className="lh-settings-content">
+      <p className="lh-section-help">{c.appearanceHelp}</p>
+      <fieldset className="lh-appearance-group">
+        <legend>Theme</legend>
+        <div className="lh-choice-row">
+          {THEME_CHOICES.map(([value, label, hint]) => (
+            <label key={value} className={`lh-choice-card${theme === value ? " is-selected" : ""}`}>
+              <input type="radio" name="theme" value={value} aria-label={label} checked={theme === value} onChange={() => setTheme(value)} />
+              <span><b>{label}</b><small>{hint}</small></span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="lh-appearance-group">
+        <legend>Motion</legend>
+        <div className="lh-choice-row">
+          {MOTION_CHOICES.map(([value, label, hint]) => (
+            <label key={value} className={`lh-choice-card${motion === value ? " is-selected" : ""}`}>
+              <input type="radio" name="motion" value={value} aria-label={label} checked={motion === value} onChange={() => setMotion(value)} />
+              <span><b>{label}</b><small>{hint}</small></span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    </div>
+  );
 }
 
 function StorageSettings({ c }: { c: SettingsCopy }) {
-  const [paths, setPaths] = useState<NativePaths | null>(null);
-  const [pathError, setPathError] = useState(false);
-  const [relocating, setRelocating] = useState(false);
-  const [relocationReceipt, setRelocationReceipt] = useState<NativeVaultRelocationReceipt | null>(null);
-  const [relocationStatus, setRelocationStatus] = useState("");
+  return <BrowserStorageSettings c={c} />;
+}
+
+function BrowserStorageSettings({ c }: { c: SettingsCopy }) {
+  const [storage, setStorage] = useState<BrowserStorageStatus | null>(null);
+  const [reportCount, setReportCount] = useState(0);
+  const [acting, setActing] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function refresh(requestPersistence = false) {
+    setActing(true);
+    try {
+      const [nextStorage, reports] = await Promise.all([
+        browserStorageStatus(requestPersistence),
+        listBrowserReports(),
+      ]);
+      setStorage(nextStorage);
+      setReportCount(reports.length);
+      if (requestPersistence) setMessage(nextStorage.persistent ? c.browserVaultPersistent : c.browserVaultBestEffort);
+    } catch {
+      setMessage(c.vaultUnavailable);
+    } finally {
+      setActing(false);
+    }
+  }
 
   useEffect(() => {
-    if (!nativeApi.available) return;
-    let active = true;
-    void nativeApi.paths().then((value) => active && setPaths(value)).catch(() => active && setPathError(true));
-    return () => { active = false; };
+    void refresh();
+  // The browser-vault status is measured once when the panel opens.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function relocateVault() {
-    if (!nativeApi.available || relocating || relocationReceipt) return;
-    setRelocating(true);
-    setRelocationStatus(c.relocatingVault);
+  async function exportBackup() {
+    setActing(true);
     try {
-      const result = await nativeApi.prepareVaultRelocation();
-      if (result.status === "cancelled") {
-        setRelocationStatus(c.relocationCancelled);
-        return;
-      }
-      setRelocationReceipt(result.receipt);
-      setRelocationStatus(c.relocationVerified);
+      const reports = await listBrowserReports();
+      const payload = JSON.stringify({
+        schema: "https://litehouse.pub/schemas/browser-vault-backup/v1",
+        exportedAt: new Date().toISOString(),
+        origin: window.location.origin,
+        reports,
+      }, null, 2);
+      const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `litehouse-vault-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      setMessage(c.browserVaultBackup);
     } catch {
-      setRelocationStatus(c.relocationFailed);
+      setMessage(c.vaultUnavailable);
     } finally {
-      setRelocating(false);
+      setActing(false);
     }
   }
 
-  async function restart() {
-    if (!relocationReceipt) return;
-    setRelocationStatus(c.restartRequired);
-    try {
-      await nativeApi.restartAfterVaultRelocation();
-    } catch {
-      setRelocationStatus(c.relocationFailed);
-    }
-  }
+  const formatBytes = (value?: number) => value === undefined
+    ? "—"
+    : new Intl.NumberFormat(undefined, { style: "unit", unit: "megabyte", maximumFractionDigits: 1 }).format(value / 1024 ** 2);
 
   return (
     <div className="lh-settings-content">
-      <p className="lh-section-help">{c.storageHelp}</p>
+      <p className="lh-section-help">{c.browserVaultHelp}</p>
       <dl className="lh-storage-facts">
-        <div><dt>{c.vaultPath}</dt><dd>{paths?.vault ?? c.vaultUnavailable}</dd></div>
-        <div><dt>{c.verifyOpen}</dt><dd><ShieldCheck aria-hidden="true" size={16} />{c.enforced}</dd></div>
-        <div><dt>{c.encryptSecrets}</dt><dd><LockKeyhole aria-hidden="true" size={16} />{c.credentialManaged}</dd></div>
+        <div><dt>{c.browserVault}</dt><dd><Database aria-hidden="true" size={16} />IndexedDB · {window.location.origin}</dd></div>
+        <div><dt>{c.browserVaultUsage}</dt><dd>{formatBytes(storage?.usage)} / {formatBytes(storage?.quota)}</dd></div>
+        <div><dt>{c.browserVaultReports}</dt><dd>{reportCount}</dd></div>
+        <div><dt>Eviction policy</dt><dd><ShieldCheck aria-hidden="true" size={16} />{storage?.persistent ? c.browserVaultPersistent : c.browserVaultBestEffort}</dd></div>
       </dl>
-      {pathError && <p className="lh-settings-state is-error" role="alert">{c.vaultUnavailable}</p>}
-      <details className="lh-settings-disclosure lh-storage-relocation-slot">
-        <summary>{c.relocationTitle}</summary>
-        <p>{c.relocation}</p>
-        {!nativeApi.available ? <p>{c.relocationPending}</p> : (
-          <>
-            {!relocationReceipt && <button className="button button-secondary" type="button" disabled={relocating} onClick={() => void relocateVault()}><Database aria-hidden="true" size={17} />{relocating ? c.relocatingVault : c.relocateVault}</button>}
-            {relocationReceipt && (
-              <div className="lh-vault-relocation-receipt">
-                <p><FileCheck2 aria-hidden="true" size={18} /><strong>{c.relocationVerified}</strong></p>
-                <dl>
-                  <div><dt>{c.destinationVault}</dt><dd>{relocationReceipt.destination_root}</dd></div>
-                  <div><dt>{c.filesVerified}</dt><dd>{relocationReceipt.files_verified.toLocaleString()}</dd></div>
-                  <div><dt>{c.bytesVerified}</dt><dd>{relocationReceipt.bytes_verified.toLocaleString()}</dd></div>
-                  <div><dt>{c.sourcePreserved}</dt><dd>{relocationReceipt.source_root}</dd></div>
-                </dl>
-                <p>{c.restartRequired}</p>
-                <button className="button button-primary" type="button" onClick={() => void restart()}>{c.restartNow}</button>
-              </div>
-            )}
-            <p role="status" aria-live="polite">{relocationStatus}</p>
-          </>
-        )}
-      </details>
+      <div className="lh-inline-actions">
+        {!storage?.persistent && <button className="button button-primary" type="button" disabled={acting} onClick={() => void refresh(true)}><ShieldCheck aria-hidden="true" size={17} />{c.browserVaultRequest}</button>}
+        <button className="button button-secondary" type="button" disabled={acting} onClick={() => void exportBackup()}><FileOutput aria-hidden="true" size={17} />{c.browserVaultBackup}</button>
+        <Link className="button button-secondary" to="/privacy"><ExternalLink aria-hidden="true" size={16} />Privacy architecture</Link>
+      </div>
+      <p className="lh-safety-note"><LockKeyhole aria-hidden="true" size={18} />{c.browserVaultEncryption}</p>
+      <p className="lh-info-strip"><ShieldCheck aria-hidden="true" size={17} />{c.browserVaultClear}</p>
+      <p role="status" aria-live="polite">{message}</p>
     </div>
   );
 }
 
-function UpdateSettings({ c, settings, update, setStatus }: { c: SettingsCopy; settings: LocalSettings; update: SettingsUpdate; setStatus: (status: string) => void }) {
-  const [updateInfo, setUpdateInfo] = useState<NativeUpdateInfo | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [installing, setInstalling] = useState(false);
-
-  async function checkForUpdate() {
-    if (!nativeApi.available) {
-      setStatus(c.updateStatus);
-      return;
-    }
-    setChecking(true);
-    setStatus(c.checkingUpdate);
-    try {
-      const result = await nativeApi.checkForUpdate();
-      setUpdateInfo(result);
-      setStatus(result.available ? c.updateAvailable : c.noUpdate);
-    } catch {
-      setStatus(c.updateError);
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  async function install() {
-    if (!updateInfo?.available || !updateInfo.version || installing) return;
-    const approved = window.confirm(
-      c.installConfirm.replace("{{version}}", updateInfo.version),
-    );
-    if (!approved) return;
-    setInstalling(true);
-    setStatus(c.installingUpdate);
-    try {
-      await nativeApi.installUpdate(updateInfo.version);
-    } catch {
-      setInstalling(false);
-      setStatus(c.updateError);
-    }
-  }
-
-  return <div className="lh-settings-content"><p className="lh-section-help">{c.updatesHelp}</p><p className="lh-info-strip"><DownloadCloud aria-hidden="true" size={17} /><b>{c.alphaChannel}</b></p><label className="lh-switch-row lh-wide-switch"><span><RefreshCw aria-hidden="true" size={17} /><b>{c.autoCheck}</b></span><input type="checkbox" role="switch" checked={settings.autoCheck} onChange={(event) => { update("autoCheck", event.target.checked); setAutoCheckEnabled(event.target.checked); }} /></label><p className="lh-safety-note"><ShieldCheck aria-hidden="true" size={18} /><span><b>{c.confirmInstall}</b><br /><small>Signature → release notes → confirmation → install</small></span></p>{updateInfo?.available && updateInfo.version && <section className="lh-update-card" aria-labelledby="available-update"><p className="eyebrow">{c.updateAvailable}</p><h3 id="available-update">Litehouse {updateInfo.version}</h3><dl><div><dt>{c.currentVersion}</dt><dd>{updateInfo.current_version}</dd></div><div><dt>{c.releaseVersion}</dt><dd>{updateInfo.version}</dd></div>{updateInfo.notes && <div><dt>{c.releaseNotes}</dt><dd>{updateInfo.notes}</dd></div>}{updateInfo.artifact_url && <div><dt>{c.artifact}</dt><dd><a href={updateInfo.artifact_url} target="_blank" rel="noreferrer">GitHub release <ExternalLink aria-hidden="true" size={14} /></a></dd></div>}</dl><button className="button button-primary" type="button" disabled={installing} onClick={install}><DownloadCloud aria-hidden="true" size={17} />{c.installUpdate}</button></section>}<button className="button button-secondary" type="button" disabled={checking || installing} onClick={checkForUpdate}><DownloadCloud aria-hidden="true" size={17} />{checking ? c.checkingUpdate : c.checkUpdate}</button></div>;
+function UpdateSettings({ c }: { c: SettingsCopy; settings: LocalSettings; update: SettingsUpdate; setStatus: (status: string) => void }) {
+  return (
+    <div className="lh-settings-content">
+      <p className="lh-section-help">{c.webUpdateHelp}</p>
+      <div className="lh-model-recommendation">
+        <div><p className="eyebrow">GitHub Pages</p><h3>Litehouse web alpha</h3><p>HTTPS · commit-linked build · SHA-256 manifest</p></div>
+        <ShieldCheck aria-hidden="true" size={30} />
+      </div>
+      <div className="lh-inline-actions">
+        <button className="button button-primary" type="button" onClick={() => window.location.reload()}><RefreshCw aria-hidden="true" size={17} />{c.webUpdateReload}</button>
+        <a className="button button-secondary" href="https://github.com/tunabirgun/litehouse/actions" target="_blank" rel="noopener noreferrer"><ExternalLink aria-hidden="true" size={16} />{c.webUpdateSource}</a>
+      </div>
+      <p className="lh-safety-note"><LockKeyhole aria-hidden="true" size={18} />No installer, updater daemon, or Litehouse account service runs on this device.</p>
+    </div>
+  );
 }
 
 function DiagnosticSettings({ c, setStatus }: { c: SettingsCopy; setStatus: (status: string) => void }) {
   const platform = navigator.platform || "Unknown";
-  const [paths, setPaths] = useState<NativePaths | null>(null);
-  const [apiReachable, setApiReachable] = useState<boolean | null>(null);
-
-  async function refreshDiagnostics() {
-    if (!nativeApi.available) {
-      setStatus(c.nativeRequired);
-      return;
-    }
-    try {
-      const [nextPaths, health] = await Promise.all([
-        nativeApi.paths(),
-        nativeApi.request("GET", "/v1/health"),
-      ]);
-      setPaths(nextPaths);
-      setApiReachable(health.status === 200);
-      setStatus(c.diagnosticStatus);
-    } catch {
-      setApiReachable(false);
-      setStatus(c.unavailable);
-    }
-  }
+  const offlineShell = document.documentElement.dataset.offlineShell;
 
   async function copyDiagnostics() {
     const redacted = JSON.stringify({
       version: "0.1.0-alpha.1",
       platform,
-      native: nativeApi.available,
-      api_reachable: apiReachable,
-      vault_configured: Boolean(paths?.vault),
+      mode: "static-web",
+      origin: window.location.origin,
+      secure_context: window.isSecureContext,
+      indexed_db: "indexedDB" in window,
+      web_gpu: "gpu" in navigator,
+      service_worker: "serviceWorker" in navigator,
+      offline_shell: offlineShell ?? "registration-pending",
       secrets: "redacted",
     }, null, 2);
     try {
@@ -1356,7 +976,14 @@ function DiagnosticSettings({ c, setStatus }: { c: SettingsCopy; setStatus: (sta
     }
   }
 
-  return <div className="lh-settings-content"><p className="lh-section-help">{c.diagnosticsHelp}</p><dl className="lh-diagnostics"><div><dt>{c.appVersion}</dt><dd>0.1.0-alpha.1</dd></div><div><dt>{c.platform}</dt><dd>{platform}</dd></div><div><dt>{c.api}</dt><dd><span className="lh-diagnostic-state pending">{apiReachable ? "■" : "◧"}</span> {apiReachable === null ? c.nativeRequired : apiReachable ? c.reachable : c.unavailable}</dd></div><div><dt>{c.vault}</dt><dd>{paths?.vault ?? c.nativeRequired}</dd></div><div><dt>{c.modelRuntime}</dt><dd><span className="lh-diagnostic-state pending">◧</span> {c.nativeRequired}</dd></div></dl><div className="lh-inline-actions"><button className="button button-secondary" type="button" onClick={refreshDiagnostics}><RefreshCw aria-hidden="true" size={17} />{c.refresh}</button><button className="button button-secondary" type="button" onClick={copyDiagnostics}>{c.copyDiagnostics}</button></div></div>;
+  const offlineShellLabel = !("serviceWorker" in navigator)
+    ? "Unavailable"
+    : offlineShell === "failed"
+      ? "Registration failed — online mode still works"
+      : offlineShell === "registered"
+        ? "Registered for this app scope"
+        : "Registration pending";
+  return <div className="lh-settings-content"><p className="lh-section-help">Capability facts are computed in this browser. The copied diagnostic contains no keys, report text, search terms, file names, or vault contents.</p><dl className="lh-diagnostics"><div><dt>{c.appVersion}</dt><dd>0.1.0-alpha.1 · web</dd></div><div><dt>{c.platform}</dt><dd>{platform}</dd></div><div><dt>Secure context</dt><dd><span className="lh-diagnostic-state pending">{window.isSecureContext ? "■" : "◧"}</span> {window.isSecureContext ? "HTTPS active" : "HTTPS required"}</dd></div><div><dt>Browser vault</dt><dd><span className="lh-diagnostic-state pending">{"indexedDB" in window ? "■" : "◧"}</span> {"indexedDB" in window ? "IndexedDB available" : "Unavailable"}</dd></div><div><dt>Local AI</dt><dd><span className="lh-diagnostic-state pending">{"gpu" in navigator ? "■" : "◧"}</span> {"gpu" in navigator ? "WebGPU exposed" : "WebGPU not exposed"}</dd></div><div><dt>Offline shell</dt><dd><span className="lh-diagnostic-state pending">{offlineShell === "registered" ? "■" : "◧"}</span> {offlineShellLabel}</dd></div></dl><div className="lh-inline-actions"><button className="button button-secondary" type="button" onClick={copyDiagnostics}>{c.copyDiagnostics}</button><Link className="button button-secondary" to="/privacy">Privacy architecture</Link></div></div>;
 }
 
 function ShortcutSettings({ c }: { c: SettingsCopy }) {

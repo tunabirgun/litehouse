@@ -1,18 +1,20 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
-export default defineConfig({
-  plugins: [react()],
-  publicDir: "../assets",
-  server: {
-    host: "127.0.0.1",
-    port: 4173,
-    strictPort: true,
-    proxy: {
-      "/v1": "http://127.0.0.1:8765",
+export default defineConfig(({ mode }) => {
+  const base = mode === "production" ? "/litehouse/" : "/";
+
+  return {
+    base,
+    plugins: [react()],
+    publicDir: "../assets",
+    server: {
+      host: "127.0.0.1",
+      port: 4173,
+      strictPort: true,
     },
-  },
-  build: {
-    target: "es2023",
-  },
+    build: {
+      target: "es2023",
+    },
+  };
 });

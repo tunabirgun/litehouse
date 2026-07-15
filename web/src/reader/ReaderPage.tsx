@@ -37,8 +37,6 @@ import {
 } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
-import { useI18n } from "../i18n";
-import { nativeApi } from "../native";
 import {
   annotationsToJson,
   annotationsToMarkdown,
@@ -101,149 +99,76 @@ interface VaultReaderReceipt {
   };
 }
 
-const readerCopy = {
-  en: {
-    back: "Back to Today",
-    eyebrow: "Library / saved article",
-    demo: "Open demonstration PDF",
-    local: "Open local PDF",
-    localHelp: "The selected file remains on this device and is not uploaded.",
-    page: "Page",
-    previous: "Previous page",
-    next: "Next page",
-    zoomOut: "Zoom out",
-    zoomIn: "Zoom in",
-    fitWidth: "Fit width",
-    fitPage: "Fit page",
-    rotate: "Rotate clockwise",
-    search: "Search document",
-    searchPlaceholder: "Find words in this PDF…",
-    result: "result",
-    results: "results",
-    noResults: "No matches in this document.",
-    pages: "Pages",
-    outline: "Outline",
-    noOutline: "This PDF does not provide an outline.",
-    document: "Evidence",
-    notes: "Notes",
-    sourceReceipt: "Source receipt",
-    receiptDetails: "Source, license, and full integrity receipt",
-    integrity: "Integrity",
-    verified: "SHA-256 verified",
-    checking: "Checking source bytes…",
-    mismatch: "Source bytes do not match the recorded SHA-256.",
-    source: "Source",
-    license: "Reuse license",
-    acquired: "Acquired",
-    bytes: "Bytes",
-    privacy: "Reading privacy",
-    privacyText: "Rendering, search, progress, and notes run locally. Opening the source link is the only external action on this page.",
-    selection: "Selected passage",
-    highlight: "Highlight",
-    addNote: "Add note",
-    notePlaceholder: "Why does this passage matter?",
-    saveNote: "Save anchored note",
-    cancel: "Cancel",
-    annotations: "Anchored annotations",
-    noAnnotations: "Select article text to add a highlight or note.",
-    delete: "Delete annotation",
-    editNote: "Edit note",
-    exportMd: "Export Markdown",
-    exportJson: "Export JSON",
-    save: "Save reading state",
-    saved: "Reading position and annotations saved on this device.",
-    unsaved: "Unsaved reader changes",
-    progress: "Reading progress",
-    missingTitle: "The PDF is not available",
-    missingText: "The library record exists, but no readable local artifact is attached.",
-    corruptTitle: "The PDF is corrupt or incomplete",
-    corruptText: "Litehouse refused to render bytes that did not form a valid PDF. The original artifact was not modified.",
-    unsupportedTitle: "This PDF is not supported",
-    unsupportedText: "Encrypted, password-protected, oversized, or unsupported PDFs must be converted or unlocked by their owner before reading.",
-    retry: "Return to the verified fixture",
-    loading: "Opening PDF in the local sandbox…",
-    selectedFirst: "Select text on the current page before adding an annotation.",
-    fileTooLarge: "The local PDF exceeds the 100 MiB reader limit.",
-    fileInvalid: "The selected file does not have a valid PDF header.",
-    localLicense: "License not recorded",
-    vaultSource: "Local Litehouse vault",
-    vaultAcquisition: "Verified vault artifact · authenticated loopback session · no external reader requests",
-    vaultMetadataInvalid: "The local vault returned inconsistent PDF metadata.",
-    removeSelection: "Dismiss selection",
-    current: "Current search result",
-    contextMenuFailed: "The native selection menu could not be opened.",
-  },
-  tr: {
-    back: "Bugün'e dön",
-    eyebrow: "Kütüphane / kayıtlı makale",
-    demo: "Açık gösterim PDF'i",
-    local: "Yerel PDF aç",
-    localHelp: "Seçilen dosya bu cihazda kalır ve yüklenmez.",
-    page: "Sayfa",
-    previous: "Önceki sayfa",
-    next: "Sonraki sayfa",
-    zoomOut: "Uzaklaştır",
-    zoomIn: "Yakınlaştır",
-    fitWidth: "Genişliğe sığdır",
-    fitPage: "Sayfaya sığdır",
-    rotate: "Saat yönünde döndür",
-    search: "Belgede ara",
-    searchPlaceholder: "Bu PDF'de sözcük bul…",
-    result: "sonuç",
-    results: "sonuç",
-    noResults: "Bu belgede eşleşme yok.",
-    pages: "Sayfalar",
-    outline: "İçindekiler",
-    noOutline: "Bu PDF bir içindekiler yapısı sunmuyor.",
-    document: "Kanıt",
-    notes: "Notlar",
-    sourceReceipt: "Kaynak makbuzu",
-    receiptDetails: "Kaynak, lisans ve tam bütünlük makbuzu",
-    integrity: "Bütünlük",
-    verified: "SHA-256 doğrulandı",
-    checking: "Kaynak baytları denetleniyor…",
-    mismatch: "Kaynak baytları kayıtlı SHA-256 ile eşleşmiyor.",
-    source: "Kaynak",
-    license: "Yeniden kullanım lisansı",
-    acquired: "Edinme zamanı",
-    bytes: "Bayt",
-    privacy: "Okuma gizliliği",
-    privacyText: "Görüntüleme, arama, ilerleme ve notlar yerel çalışır. Kaynak bağlantısını açmak bu sayfadaki tek dış eylemdir.",
-    selection: "Seçili bölüm",
-    highlight: "Vurgula",
-    addNote: "Not ekle",
-    notePlaceholder: "Bu bölüm neden önemli?",
-    saveNote: "Bağlantılı notu kaydet",
-    cancel: "İptal",
-    annotations: "Bağlantılı ek açıklamalar",
-    noAnnotations: "Vurgu veya not eklemek için makale metnini seçin.",
-    delete: "Ek açıklamayı sil",
-    editNote: "Notu düzenle",
-    exportMd: "Markdown aktar",
-    exportJson: "JSON aktar",
-    save: "Okuma durumunu kaydet",
-    saved: "Okuma konumu ve notlar bu cihaza kaydedildi.",
-    unsaved: "Kaydedilmemiş okuyucu değişiklikleri",
-    progress: "Okuma ilerlemesi",
-    missingTitle: "PDF kullanılamıyor",
-    missingText: "Kütüphane kaydı var, ancak okunabilir yerel bir dosya eklenmemiş.",
-    corruptTitle: "PDF bozuk veya eksik",
-    corruptText: "Litehouse geçerli PDF oluşturmayan baytları görüntülemeyi reddetti. Asıl dosya değiştirilmedi.",
-    unsupportedTitle: "Bu PDF desteklenmiyor",
-    unsupportedText: "Şifreli, parola korumalı, aşırı büyük veya desteklenmeyen PDF'ler sahibi tarafından dönüştürülmeli ya da açılmalıdır.",
-    retry: "Doğrulanmış örneğe dön",
-    loading: "PDF yerel korumalı alanda açılıyor…",
-    selectedFirst: "Ek açıklama eklemeden önce geçerli sayfada metin seçin.",
-    fileTooLarge: "Yerel PDF 100 MiB okuyucu sınırını aşıyor.",
-    fileInvalid: "Seçilen dosyanın geçerli bir PDF üstbilgisi yok.",
-    localLicense: "Lisans kaydedilmemiş",
-    vaultSource: "Yerel Litehouse kasası",
-    vaultAcquisition: "Doğrulanmış kasa dosyası · kimlik doğrulamalı yerel oturum · dış okuyucu isteği yok",
-    vaultMetadataInvalid: "Yerel kasa tutarsız PDF üstverisi döndürdü.",
-    removeSelection: "Seçimi kapat",
-    current: "Geçerli arama sonucu",
-    contextMenuFailed: "Yerel seçim menüsü açılamadı.",
-  },
+const copy = {
+  back: "Back to Today",
+  eyebrow: "Library / saved article",
+  demo: "Open demonstration PDF",
+  local: "Open local PDF",
+  localHelp: "The selected file remains on this device and is not uploaded.",
+  page: "Page",
+  previous: "Previous page",
+  next: "Next page",
+  zoomOut: "Zoom out",
+  zoomIn: "Zoom in",
+  fitWidth: "Fit width",
+  fitPage: "Fit page",
+  rotate: "Rotate clockwise",
+  search: "Search document",
+  searchPlaceholder: "Find words in this PDF…",
+  result: "result",
+  results: "results",
+  noResults: "No matches in this document.",
+  pages: "Pages",
+  outline: "Outline",
+  noOutline: "This PDF does not provide an outline.",
+  document: "Evidence",
+  notes: "Notes",
+  sourceReceipt: "Source receipt",
+  receiptDetails: "Source, license, and full integrity receipt",
+  integrity: "Integrity",
+  verified: "SHA-256 verified",
+  checking: "Checking source bytes…",
+  mismatch: "Source bytes do not match the recorded SHA-256.",
+  source: "Source",
+  license: "Reuse license",
+  acquired: "Acquired",
+  bytes: "Bytes",
+  privacy: "Reading privacy",
+  privacyText: "Rendering, search, progress, and notes run locally. Opening the source link is the only external action on this page.",
+  selection: "Selected passage",
+  highlight: "Highlight",
+  addNote: "Add note",
+  notePlaceholder: "Why does this passage matter?",
+  saveNote: "Save anchored note",
+  cancel: "Cancel",
+  annotations: "Anchored annotations",
+  noAnnotations: "Select article text to add a highlight or note.",
+  delete: "Delete annotation",
+  editNote: "Edit note",
+  exportMd: "Export Markdown",
+  exportJson: "Export JSON",
+  save: "Save reading state",
+  saved: "Reading position and annotations saved on this device.",
+  unsaved: "Unsaved reader changes",
+  progress: "Reading progress",
+  missingTitle: "The PDF is not available",
+  missingText: "The library record exists, but no readable local artifact is attached.",
+  corruptTitle: "The PDF is corrupt or incomplete",
+  corruptText: "Litehouse refused to render bytes that did not form a valid PDF. The original artifact was not modified.",
+  unsupportedTitle: "This PDF is not supported",
+  unsupportedText: "Encrypted, password-protected, oversized, or unsupported PDFs must be converted or unlocked by their owner before reading.",
+  retry: "Return to the verified fixture",
+  loading: "Opening PDF in the local sandbox…",
+  selectedFirst: "Select text on the current page before adding an annotation.",
+  fileTooLarge: "The local PDF exceeds the 100 MiB reader limit.",
+  fileInvalid: "The selected file does not have a valid PDF header.",
+  localLicense: "License not recorded",
+  vaultSource: "Local Litehouse vault",
+  vaultAcquisition: "Verified vault artifact · authenticated loopback session · no external reader requests",
+  vaultMetadataInvalid: "The local vault returned inconsistent PDF metadata.",
+  removeSelection: "Dismiss selection",
+  current: "Current search result",
+  contextMenuFailed: "The native selection menu could not be opened.",
 } as const;
 
 function isPdfHeader(bytes: Uint8Array): boolean {
@@ -318,17 +243,49 @@ function textFromItems(items: readonly unknown[]): string {
   ).join(" ");
 }
 
+const PAGE_TEXT_BATCH = 8;
+
+// Extract page text in bounded batches so only a few page proxies are live at
+// once, avoiding a memory spike on large PDFs (up to the 100 MiB reader cap).
+async function extractPageTexts(
+  documentProxy: PDFDocumentProxy,
+  isCancelled: () => boolean,
+): Promise<string[]> {
+  const texts: string[] = new Array<string>(documentProxy.numPages).fill("");
+  for (let base = 0; base < documentProxy.numPages; base += PAGE_TEXT_BATCH) {
+    if (isCancelled()) break;
+    const size = Math.min(PAGE_TEXT_BATCH, documentProxy.numPages - base);
+    await Promise.all(
+      Array.from({ length: size }, async (_, offset) => {
+        const loadedPage = await documentProxy.getPage(base + offset + 1);
+        const text = textFromItems((await loadedPage.getTextContent()).items);
+        loadedPage.cleanup();
+        texts[base + offset] = text;
+      }),
+    );
+  }
+  return texts;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Case-insensitive search matched against the original page string so match
+// indices stay aligned. The 'i' flag folds case without changing offsets, and
+// avoids host-locale-dependent lowercasing (e.g. Turkish 'İ' expanding to two
+// code points), keeping results reproducible.
 function searchDocument(pageTexts: readonly string[], rawQuery: string): ReaderSearchResult[] {
-  const query = rawQuery.trim().toLocaleLowerCase();
+  const query = rawQuery.trim();
   if (!query) return [];
+  const matcher = new RegExp(escapeRegExp(query), "giu");
   return pageTexts.flatMap((text, pageIndex) => {
-    const haystack = text.toLocaleLowerCase();
     const matches: ReaderSearchResult[] = [];
-    let from = 0;
-    while (from < haystack.length) {
-      const start = haystack.indexOf(query, from);
-      if (start < 0) break;
-      const end = start + query.length;
+    matcher.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = matcher.exec(text)) !== null) {
+      const start = match.index;
+      const end = start + match[0].length;
       const snippetStart = Math.max(0, start - 45);
       const snippetEnd = Math.min(text.length, end + 65);
       matches.push({
@@ -338,7 +295,7 @@ function searchDocument(pageTexts: readonly string[], rawQuery: string): ReaderS
         end,
         snippet: `${snippetStart ? "…" : ""}${text.slice(snippetStart, snippetEnd)}${snippetEnd < text.length ? "…" : ""}`,
       });
-      from = Math.max(end, start + 1);
+      if (matcher.lastIndex <= start) matcher.lastIndex = start + 1;
     }
     return matches;
   });
@@ -377,14 +334,49 @@ function fitZoom(
   return Math.min(byWidth, byHeight);
 }
 
+// Renders a thumbnail only once its placeholder scrolls into view, so a large
+// PDF does not mount and rasterise a canvas for every page at once.
+function LazyThumbnail(props: {
+  document: PDFDocumentProxy;
+  pageNumber: number;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const [visible, setVisible] = useState(false);
+  const placeholderRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (visible) return;
+    const element = placeholderRef.current;
+    if (!element) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setVisible(true);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  if (visible) return <PdfThumbnail {...props} />;
+  return (
+    <button
+      ref={placeholderRef}
+      className={`reader-thumbnail${props.active ? " is-active" : ""}`}
+      type="button"
+      aria-current={props.active ? "page" : undefined}
+      aria-label={`Go to page ${props.pageNumber}`}
+      onClick={props.onSelect}
+    >
+      <span>{props.pageNumber}</span>
+    </button>
+  );
+}
+
 export default function ReaderPage() {
-  const { locale } = useI18n();
-  const copy = readerCopy[locale];
   const { itemId = "demo" } = useParams<{ itemId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const forcedState = searchParams.get("state") as ReaderLoadState | null;
   const demoBytes = useMemo(() => createDemoPdf(), []);
-  const fixtureMode = itemId === "demo" || !nativeApi.available;
+  const fixtureMode = itemId === "demo";
   const [bytes, setBytes] = useState<Uint8Array | null>(
     fixtureMode && forcedState !== "missing" ? demoBytes : null,
   );
@@ -416,7 +408,8 @@ export default function ReaderPage() {
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState("");
   const [integrity, setIntegrity] = useState<"checking" | "verified" | "mismatch">("checking");
-  const readerViewport = useRef<HTMLDivElement>(null);
+  const [viewportElement, setViewportElement] = useState<HTMLElement | null>(null);
+  const [thumbnailsOpen, setThumbnailsOpen] = useState(false);
   const searchInput = useRef<HTMLInputElement>(null);
 
   const effectiveZoom = fitZoom(fitMode, zoom, availableWidth, rotation);
@@ -425,16 +418,17 @@ export default function ReaderPage() {
   const pageCount = pdfDocument?.numPages ?? 0;
   const progressPercent = pageCount ? Math.round((page / pageCount) * 100) : 0;
 
+  // Keyed to the viewport element (set via callback ref) so the observer
+  // re-subscribes whenever the viewport mounts, e.g. after leaving the
+  // loading/missing render. Otherwise availableWidth would stay at its default.
   useEffect(() => {
-    const element = readerViewport.current;
-    if (!element) return;
+    if (!viewportElement) return;
     const observer = new ResizeObserver(([entry]) => setAvailableWidth(entry.contentRect.width));
-    observer.observe(element);
+    observer.observe(viewportElement);
     return () => observer.disconnect();
-  }, []);
+  }, [viewportElement]);
 
   useEffect(() => {
-    let cancelled = false;
     if (fixtureMode) {
       setArtifactLoading(false);
       setRecord(demoRecord);
@@ -449,87 +443,14 @@ export default function ReaderPage() {
       }
       return;
     }
-    if (forcedState === "missing" || forcedState === "unsupported") {
-      setArtifactLoading(false);
-      setBytes(null);
-      setLoadState(forcedState);
-      setLoading(false);
-      return;
-    }
-    setArtifactLoading(true);
+    // Real library items are not yet readable from the browser vault; show an
+    // honest missing state. A local PDF can still be opened from the device.
+    setArtifactLoading(false);
     setBytes(null);
-    setStatus("");
-    setLoadState("ready");
-    const load = async () => {
-      if (!isOpaqueId(itemId)) throw new Error(copy.missingText);
-      const metadata = await nativeApi.request<unknown>(
-        "GET",
-        `/v1/library/items/${encodeURIComponent(itemId)}/reader`,
-      );
-      if (metadata.status === 404) throw new Error(copy.missingText);
-      if (metadata.status !== 200 || !isVaultReaderReceipt(metadata.body, itemId)) {
-        throw new Error(copy.vaultMetadataInvalid);
-      }
-      const receipt = metadata.body;
-      if (receipt.artifact.size > MAX_LOCAL_PDF_BYTES) throw new Error(copy.fileTooLarge);
-      const pdfBytes = rawIpcBytes(await nativeApi.openLibraryPdf(receipt.artifact.id));
-      if (pdfBytes.byteLength !== receipt.artifact.size) {
-        throw new Error(copy.vaultMetadataInvalid);
-      }
-      if (!isPdfHeader(pdfBytes)) throw new Error(copy.fileInvalid);
-      if (cancelled) return;
-      const sourceLabel = receipt.artifact.source.name
-        || receipt.artifact.source.url
-        || copy.vaultSource;
-      setRecord({
-        id: receipt.artifact.id,
-        title: receipt.item.title,
-        authors: receipt.artifact.source.name || copy.vaultSource,
-        citation: `${receipt.item.title} · ${receipt.artifact.kind.replaceAll("_", " ")}`,
-        sourceUrl: safeExternalUrl(receipt.artifact.source.url),
-        sourceLabel,
-        license: receipt.artifact.source.license_expression || copy.localLicense,
-        licenseUrl: safeExternalUrl(receipt.artifact.source.license_url),
-        sha256: receipt.artifact.sha256,
-        byteLength: receipt.artifact.size,
-        acquiredAt: receipt.artifact.created_at,
-        acquisition: copy.vaultAcquisition,
-      });
-      setLoading(true);
-      setBytes(pdfBytes);
-      setLoadState("ready");
-    };
-    void load().catch((error: unknown) => {
-      if (cancelled) return;
-      const message = error instanceof Error ? error.message : copy.missingText;
-      const nextState: ReaderLoadState = /100 MiB|supported PDF/i.test(message)
-        ? "unsupported"
-        : /SHA-256|integrity|receipt|metadata|valid PDF|PDF üstverisi/i.test(message)
-          ? "corrupt"
-          : "missing";
-      setBytes(null);
-      setLoading(false);
-      setLoadState(nextState);
-      setStatus(message);
-    }).finally(() => {
-      if (!cancelled) setArtifactLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    copy.fileInvalid,
-    copy.fileTooLarge,
-    copy.localLicense,
-    copy.missingText,
-    copy.vaultAcquisition,
-    copy.vaultMetadataInvalid,
-    copy.vaultSource,
-    demoBytes,
-    fixtureMode,
-    forcedState,
-    itemId,
-  ]);
+    setLoading(false);
+    setLoadState("missing");
+    setStatus(copy.missingText);
+  }, [copy.missingText, demoBytes, fixtureMode, forcedState]);
 
   useEffect(() => {
     if (!bytes) {
@@ -564,14 +485,8 @@ export default function ReaderPage() {
 
     void task.promise.then(async (documentProxy) => {
       if (cancelled) return;
-      const texts = await Promise.all(
-        Array.from({ length: documentProxy.numPages }, async (_, index) => {
-          const loadedPage = await documentProxy.getPage(index + 1);
-          const text = textFromItems((await loadedPage.getTextContent()).items);
-          loadedPage.cleanup();
-          return text;
-        }),
-      );
+      const texts = await extractPageTexts(documentProxy, () => cancelled);
+      if (cancelled) return;
       const pdfOutline = await documentProxy.getOutline();
       const entries = await Promise.all((pdfOutline ?? []).map(async (item) => {
         try {
@@ -935,11 +850,11 @@ export default function ReaderPage() {
 
       <div className="reader-workspace">
         <aside className="reader-left-rail" aria-label="Document navigation">
-          <details className="reader-rail-disclosure">
+          <details className="reader-rail-disclosure" onToggle={(event) => setThumbnailsOpen(event.currentTarget.open)}>
             <summary id="reader-pages-title"><Files aria-hidden="true" size={15} /> <span>{copy.pages}</span><small>{page}/{pageCount || "—"}</small></summary>
             <div className="reader-thumbnails">
-              {pdfDocument && Array.from({ length: pdfDocument.numPages }, (_, index) => (
-                <PdfThumbnail
+              {thumbnailsOpen && pdfDocument && Array.from({ length: pdfDocument.numPages }, (_, index) => (
+                <LazyThumbnail
                   key={index + 1}
                   document={pdfDocument}
                   pageNumber={index + 1}
@@ -964,17 +879,10 @@ export default function ReaderPage() {
         </aside>
 
         <section
-          ref={readerViewport}
+          ref={setViewportElement}
           className="reader-viewport"
           aria-label="PDF document viewport"
           tabIndex={0}
-          onContextMenu={(event) => {
-            if (!nativeApi.available || !selectionAnchor) return;
-            event.preventDefault();
-            void nativeApi.showContextMenu("reader-selection").catch(() => {
-              setStatus(copy.contextMenuFailed);
-            });
-          }}
         >
           {loading && <div className="reader-loading" role="status">{copy.loading}</div>}
           {pdfDocument && (
@@ -1012,8 +920,8 @@ export default function ReaderPage() {
                   <div><dt>{copy.source}</dt><dd>{record.sourceUrl ? <a href={record.sourceUrl} target="_blank" rel="noreferrer">{record.sourceLabel} <ExternalLink aria-hidden="true" size={13} /></a> : record.sourceLabel}</dd></div>
                   <div><dt>{copy.license}</dt><dd>{record.licenseUrl ? <a href={record.licenseUrl} target="_blank" rel="noreferrer">{record.license} <ExternalLink aria-hidden="true" size={13} /></a> : record.license}</dd></div>
                   <div><dt>SHA-256</dt><dd><code>{record.sha256}</code></dd></div>
-                  <div><dt>{copy.bytes}</dt><dd>{record.byteLength.toLocaleString(locale)}</dd></div>
-                  <div><dt>{copy.acquired}</dt><dd><time dateTime={record.acquiredAt}>{new Date(record.acquiredAt).toLocaleString(locale)}</time></dd></div>
+                  <div><dt>{copy.bytes}</dt><dd>{record.byteLength.toLocaleString("en")}</dd></div>
+                  <div><dt>{copy.acquired}</dt><dd><time dateTime={record.acquiredAt}>{new Date(record.acquiredAt).toLocaleString("en")}</time></dd></div>
                 </dl>
                 <p className="reader-acquisition">{record.acquisition}</p>
                 <section className="reader-privacy-note">

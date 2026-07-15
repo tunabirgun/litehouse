@@ -1797,8 +1797,8 @@
 
 @media (max-width: 500px) {
   .primary-nav {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    padding-inline: max(3px, env(safe-area-inset-left));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    padding-inline: max(3px, env(safe-area-inset-left, 0px)) max(3px, env(safe-area-inset-right, 0px));
   }
 
   .primary-nav .nav-item {
@@ -1812,6 +1812,10 @@
     line-height: 1.05;
     text-align: center;
   }
+
+  .lh-preparation-stats {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1823,4 +1827,15 @@
 html[data-motion="reduced"] .lh-switch-row input[role="switch"]::after,
 html[data-motion="off"] .lh-switch-row input[role="switch"]::after {
   transition: none;
+}
+
+.lh-report-progress {
+  margin: 0 0 14px;
+  padding: 11px 15px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.4;
 }

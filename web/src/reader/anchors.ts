@@ -80,30 +80,6 @@ export function createAnnotation({
   };
 }
 
-export function locateAnchor(pageText: string, anchor: TextQuoteAnchor): number | null {
-  if (pageText.slice(anchor.start, anchor.end) === anchor.exact) return anchor.start;
-  const candidates: number[] = [];
-  let from = 0;
-  while (from <= pageText.length) {
-    const candidate = pageText.indexOf(anchor.exact, from);
-    if (candidate < 0) break;
-    candidates.push(candidate);
-    from = candidate + Math.max(1, anchor.exact.length);
-  }
-  if (!candidates.length) return null;
-  const contextual = candidates.find((candidate) => {
-    const prefix = pageText.slice(Math.max(0, candidate - anchor.prefix.length), candidate);
-    const suffix = pageText.slice(
-      candidate + anchor.exact.length,
-      candidate + anchor.exact.length + anchor.suffix.length,
-    );
-    return prefix === anchor.prefix && suffix === anchor.suffix;
-  });
-  return contextual ?? candidates.reduce((best, candidate) =>
-    Math.abs(candidate - anchor.start) < Math.abs(best - anchor.start) ? candidate : best,
-  );
-}
-
 export function annotationsToMarkdown(
   title: string,
   citation: string,

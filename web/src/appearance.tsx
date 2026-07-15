@@ -13,13 +13,28 @@ interface AppearanceValue {
 const AppearanceContext = createContext<AppearanceValue | null>(null);
 
 function getStoredTheme(): ThemePreference {
-  const value = window.localStorage.getItem("litehouse.theme");
-  return value === "light" || value === "dark" ? value : "system";
+  try {
+    const value = window.localStorage.getItem("litehouse.theme");
+    return value === "light" || value === "dark" ? value : "system";
+  } catch {
+    return "system";
+  }
 }
 
 function getStoredMotion(): MotionPreference {
-  const value = window.localStorage.getItem("litehouse.motion");
-  return value === "reduced" || value === "off" ? value : "full";
+  try {
+    const value = window.localStorage.getItem("litehouse.motion");
+    return value === "reduced" || value === "off" ? value : "full";
+  } catch {
+    return "full";
+  }
+}
+
+function themeColorFor(theme: ThemePreference): string {
+  const isDark =
+    theme === "dark" ||
+    (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  return isDark ? "#11100d" : "#f4f0e6";
 }
 
 export function AppearanceProvider({ children }: { children: ReactNode }) {
@@ -27,16 +42,35 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
   const [motion, setMotion] = useState<MotionPreference>(getStoredMotion);
 
   useEffect(() => {
-    window.localStorage.setItem("litehouse.theme", theme);
+    try {
+      window.localStorage.setItem("litehouse.theme", theme);
+    } catch {
+      // Storage may be blocked in privacy-hardened browsers.
+    }
     document.documentElement.dataset.theme = theme;
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-    if (themeColor) {
-      themeColor.content = theme === "dark" ? "#11100d" : "#f4f0e6";
+    if (!themeColor) {
+      return;
     }
+    themeColor.content = themeColorFor(theme);
+    if (theme !== "system") {
+      return;
+    }
+    // Track OS scheme changes while following the system preference.
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => {
+      themeColor.content = themeColorFor("system");
+    };
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
   }, [theme]);
 
   useEffect(() => {
-    window.localStorage.setItem("litehouse.motion", motion);
+    try {
+      window.localStorage.setItem("litehouse.motion", motion);
+    } catch {
+      // Storage may be blocked in privacy-hardened browsers.
+    }
     document.documentElement.dataset.motion = motion;
   }, [motion]);
 

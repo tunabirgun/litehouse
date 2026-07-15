@@ -1,0 +1,27 @@
+{
+  "id": "./",
+  "name": "Litehouse",
+  "short_name": "Litehouse",
+  "description": "A browser-local desk for evidence-linked literature updates and research reports.",
+  "lang": "en",
+  "start_url": "./#/today",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f0e6",
+  "theme_color": "#f4f0e6",
+  "categories": ["education", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "brand/png/litehouse-lettermark-pwa-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "brand/png/litehouse-lettermark-light.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

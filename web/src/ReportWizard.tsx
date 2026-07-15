@@ -12,8 +12,15 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { useI18n } from "./i18n";
-import { nativeApi } from "./native";
+import { saveBrowserReport } from "./browser/vault";
+import { createGroundedReport, synthesisPrompt, type GroundedReport } from "./research/report";
+import { reportToLatex } from "./research/latex";
+import { digestCanonical } from "./research/integrity";
+import { searchLiterature } from "./research/sources";
+import type { BrowserSourceId } from "./research/types";
+import { generateWithRemoteProvider, RemoteProviderError } from "./providers/remote";
+import { getSessionRemoteProvider } from "./providers/session";
+import { browserModelRuntime } from "./llm/browserModelRuntime";
 
 type RunMode = "one-off" | "watch";
 type AccessPolicy = "open-only" | "include-abstracts";
@@ -42,36 +49,18 @@ export interface WizardData {
   outputs: string[];
 }
 
-export interface GeneratedReportReceipt {
-  report_id: string;
-  report_document_sha256: string;
-  preparation_sha256: string;
-  specification_sha256: string;
-  result_sha256: string;
-  partial: boolean;
-  synthesis_status: string;
-  requested_citation_style: string;
-  applied_citation_style: string;
-  work_count: number;
-  claim_count: number;
-  abstract_evidence_count: number;
-  full_text_evidence_count: number;
-  artifacts: {
-    output_format: string;
-    artifact_id: string;
-    artifact_sha256: string;
-    size: number;
-    manifest_id: string | null;
-    manifest_sha256: string | null;
-  }[];
-  source_errors: { source: string; code: string; retryable: boolean }[];
-  format_errors: string[];
-}
-
 export type SubmissionReceipt =
-  | { kind: "generated"; report: GeneratedReportReceipt }
-  | { kind: "watch"; watchId: string; runId: string; runStatus: string }
-  | { kind: "local" };
+  | { kind: "browser"; report: GroundedReport }
+  | { kind: "watch"; watchId: string; runId: string; runStatus: string; browserReport?: GroundedReport };
+
+const BROWSER_SOURCES = new Set<BrowserSourceId>([
+  "openalex",
+  "crossref",
+  "datacite",
+  "europe-pmc",
+  "semantic-scholar",
+  "library-of-congress",
+]);
 
 function localIsoDate(date: Date) {
   const year = date.getFullYear();
@@ -121,7 +110,7 @@ export function createDefaultDraft(): WizardData {
     workTypes: ["journal-article"],
     expertise: [preferences.expertise?.trim() || "doctoral"],
     priorKnowledge: preferences.priorKnowledge ?? "",
-    accessPolicy: preferences.openOnly === false ? "include-abstracts" : "open-only",
+    accessPolicy: preferences.openOnly === true ? "open-only" : "include-abstracts",
     sources: preferredSources.length ? preferredSources : ["openalex", "crossref", "datacite"],
     ranking: ["recent-attention", "normalized-influence"],
     depth: "standard",
@@ -146,7 +135,7 @@ function readDraft(): WizardData {
       expertise: Array.isArray(parsed.expertise) ? parsed.expertise : defaults.expertise,
       sources: Array.isArray(parsed.sources) ? parsed.sources : defaults.sources,
       ranking: Array.isArray(parsed.ranking) ? parsed.ranking : defaults.ranking,
-      outputs: Array.isArray(parsed.outputs) ? parsed.outputs : defaults.outputs,
+      outputs: defaults.outputs,
     };
   } catch {
     return defaults;
@@ -156,279 +145,176 @@ function readDraft(): WizardData {
 const steps = ["intent", "coverage", "reader", "evidence", "output", "review"] as const;
 
 const copy = {
-  en: {
-    eyebrow: "Guided literature request",
-    title: "Build a report with explicit boundaries",
-    lede: "Litehouse asks the questions that change retrieval, ranking, evidence access, and the form of the final report.",
-    back: "Back to Today",
-    draft: "Draft saved on this device",
-    steps: ["Intent", "Coverage", "Reader", "Evidence", "Output", "Review"],
-    previous: "Previous",
-    next: "Continue",
-    required: "Complete the required choices before continuing.",
-    intentTitle: "What should Litehouse investigate?",
-    intentHelp: "State the concept in your own terms. Scope and exclusions prevent broad searches from drifting.",
-    mode: "Request type",
-    oneOff: "One-off report",
-    oneOffHelp: "Search once for the selected publication interval.",
-    watch: "Recurring watch",
-    watchHelp: "Repeat the same bounded search on a schedule.",
-    topic: "Topic or research question",
-    topicPlaceholder: "e.g. How have artists used machine vision in documentary practice?",
-    scope: "Scope and concepts to include",
-    scopePlaceholder: "Populations, places, methods, theories, media, or adjacent terms…",
-    exclusions: "Exclusions",
-    exclusionsPlaceholder: "Terms, study designs, populations, or interpretations to leave out…",
-    coverageTitle: "Set the publication window and sources of variation",
-    interval: "Publication interval",
-    from: "From",
-    to: "To",
-    schedule: "Delivery schedule",
-    frequency: "Frequency",
-    daily: "Daily",
-    weekly: "Weekly",
-    monthly: "Monthly",
-    time: "Local time",
-    timezone: "Time zone (IANA)",
-    languages: "Publication languages",
-    languageHelp: "English is selected by default. Select more than one when translated or multilingual work is in scope.",
-    disciplines: "Research fields",
-    disciplinesHelp: "Choose every field whose sources and work types should be searched.",
-    workTypes: "Work types",
-    readerTitle: "Calibrate the report to its reader",
-    expertise: "Ordered education and expertise",
-    expertiseHelp: "The first selection sets the primary reading level. Reorder the list to express mixed backgrounds.",
-    prior: "Prior knowledge and terminology",
-    priorPlaceholder: "Methods, theories, organisms, periods, software, or concepts the report may assume…",
-    moveUp: "Move up",
-    moveDown: "Move down",
-    evidenceTitle: "Choose access and ranking rules",
-    access: "Access policy",
-    openOnly: "Open full text only",
-    openOnlyHelp: "Retrieve and read full text only when access and reuse terms can be verified.",
-    includeAbstracts: "Include paywalled records as metadata and abstracts",
-    includeAbstractsHelp: "Explicit opt-in. Litehouse may summarize the available abstract, labels it abstract-only, and never tries to obtain paid full text.",
-    noBypass: "Litehouse never bypasses authentication, paywalls, access controls, or publisher terms.",
-    sources: "Scholarly sources",
-    ranking: "Impact-ranking intent",
-    rankingHelp: "Ranking changes reading order, not scientific truth. Every signal stays visible and separate from evidence strength.",
-    rankingTruth: "No citation, venue, or attention signal is treated as proof that a claim is true.",
-    outputTitle: "Shape the report",
-    depth: "Report depth",
-    brief: "Brief digest",
-    standard: "Standard review",
-    deep: "Deep review",
-    recommendations: "Include bounded reading recommendations",
-    recommendationsHelp: "Recommendations cite their evidence and explain why the work may merit closer reading.",
-    citation: "Reference style",
-    formats: "Output formats",
-    latexHelp: "LaTeX requests render to a monochrome A4 research report with references and a SHA-256 manifest.",
-    reviewTitle: "Review the retrieval contract",
-    reviewHelp: "These choices become an immutable request revision. Later edits create a new revision so prior reports remain reproducible.",
-    inquiry: "Inquiry",
-    timing: "Timing",
-    audience: "Audience",
-    accessReview: "Access",
-    rankingReview: "Ranking",
-    deliverables: "Deliverables",
-    submitOne: "Generate evidence-locked report",
-    submitWatch: "Save recurring watch",
-    savedTitle: "Request saved",
-    preparedOne: "The bounded search completed and its evidence-locked report artifacts were stored in the local vault.",
-    savedOne: "The one-off request was stored as a local alpha draft and is ready for the retrieval service.",
-    savedWatch: "The recurring watch was stored as a local alpha draft and is ready for the scheduler.",
-    newRequest: "Start another request",
-    localCaveat: "Alpha interface: this screen persists the validated request locally until the packaged app supplies its authenticated local API session.",
-    preparing: "Preparing…",
-    submitFailed: "The authenticated local service could not prepare this request. The draft remains saved for review.",
-    preparationReceipt: "Report receipt",
-    preparationSha: "Preparation SHA-256",
-    resultSha: "Result SHA-256",
-    fetched: "Works",
-    included: "Claims",
-    returned: "Evidence excerpts",
-    sourceState: "Generated artifacts",
-    synthesis: "Synthesis",
-    appliedCitation: "Applied citation style",
-    artifactIntegrity: "Artifact and manifest integrity",
-    formatIssues: "Unavailable requested formats",
-    partialSources: "Partial source failures",
-    completeSources: "All selected sources responded",
-    firstResults: "Vault artifacts",
-    queuedRun: "First scheduled run queued",
-    watchIdentifier: "Watch identifier",
-    runIdentifier: "Run identifier",
-    runStatus: "Run status",
-  },
-  tr: {
-    eyebrow: "Yönlendirmeli literatür isteği",
-    title: "Sınırları açık bir rapor oluşturun",
-    lede: "Litehouse; taramayı, sıralamayı, kanıt erişimini ve son raporun biçimini değiştiren soruları sorar.",
-    back: "Bugün'e dön",
-    draft: "Taslak bu cihazda kaydedildi",
-    steps: ["Amaç", "Kapsam", "Okuyucu", "Kanıt", "Çıktı", "Kontrol"],
-    previous: "Önceki",
-    next: "Devam",
-    required: "Devam etmeden önce gerekli seçimleri tamamlayın.",
-    intentTitle: "Litehouse neyi araştırmalı?",
-    intentHelp: "Kavramı kendi terimlerinizle yazın. Kapsam ve dışlamalar geniş taramaların sapmasını önler.",
-    mode: "İstek türü",
-    oneOff: "Tek seferlik rapor",
-    oneOffHelp: "Seçilen yayın aralığını bir kez tarar.",
-    watch: "Yinelenen izleme",
-    watchHelp: "Aynı sınırlandırılmış taramayı bir programa göre tekrarlar.",
-    topic: "Konu veya araştırma sorusu",
-    topicPlaceholder: "örn. Sanatçılar belgesel pratikte makine görüşünü nasıl kullandı?",
-    scope: "Dahil edilecek kapsam ve kavramlar",
-    scopePlaceholder: "Topluluklar, yerler, yöntemler, kuramlar, ortamlar veya komşu terimler…",
-    exclusions: "Dışlamalar",
-    exclusionsPlaceholder: "Dışarıda bırakılacak terimler, çalışma tasarımları, topluluklar veya yorumlar…",
-    coverageTitle: "Yayın aralığını ve değişkenlik kaynaklarını belirleyin",
-    interval: "Yayın aralığı",
-    from: "Başlangıç",
-    to: "Bitiş",
-    schedule: "Teslim programı",
-    frequency: "Sıklık",
-    daily: "Günlük",
-    weekly: "Haftalık",
-    monthly: "Aylık",
-    time: "Yerel saat",
-    timezone: "Saat dilimi (IANA)",
-    languages: "Yayın dilleri",
-    languageHelp: "İngilizce varsayılan olarak seçilidir. Çeviri veya çok dilli çalışmalar kapsama giriyorsa ek diller seçin.",
-    disciplines: "Araştırma alanları",
-    disciplinesHelp: "Kaynakları ve çalışma türleri taranacak tüm alanları seçin.",
-    workTypes: "Çalışma türleri",
-    readerTitle: "Raporu okuyucuya göre ayarlayın",
-    expertise: "Sıralı eğitim ve uzmanlık",
-    expertiseHelp: "İlk seçim ana okuma düzeyini belirler. Karma geçmişleri ifade etmek için listeyi sıralayın.",
-    prior: "Ön bilgi ve terminoloji",
-    priorPlaceholder: "Raporun bilindiğini varsayabileceği yöntemler, kuramlar, organizmalar, dönemler, yazılımlar veya kavramlar…",
-    moveUp: "Yukarı taşı",
-    moveDown: "Aşağı taşı",
-    evidenceTitle: "Erişim ve sıralama kurallarını seçin",
-    access: "Erişim politikası",
-    openOnly: "Yalnızca açık tam metin",
-    openOnlyHelp: "Tam metni yalnızca erişim ve yeniden kullanım koşulları doğrulanabiliyorsa alır ve okur.",
-    includeAbstracts: "Ücretli kayıtları üstveri ve özet olarak dahil et",
-    includeAbstractsHelp: "Açık onay gerektirir. Litehouse mevcut özeti özetleyebilir, kaydı yalnızca-özet olarak işaretler ve ücretli tam metni edinmeye çalışmaz.",
-    noBypass: "Litehouse kimlik doğrulamayı, ödeme duvarlarını, erişim denetimlerini veya yayıncı koşullarını aşmaz.",
-    sources: "Akademik kaynaklar",
-    ranking: "Etki sıralama amacı",
-    rankingHelp: "Sıralama okuma düzenini değiştirir; bilimsel gerçeği değil. Her sinyal görünür kalır ve kanıt gücünden ayrı tutulur.",
-    rankingTruth: "Atıf, yayın yeri veya ilgi sinyali bir iddianın doğruluğunun kanıtı sayılmaz.",
-    outputTitle: "Raporu biçimlendirin",
-    depth: "Rapor derinliği",
-    brief: "Kısa özet",
-    standard: "Standart inceleme",
-    deep: "Derin inceleme",
-    recommendations: "Sınırlandırılmış okuma önerileri ekle",
-    recommendationsHelp: "Öneriler kanıtını gösterir ve çalışmanın neden daha yakından okunabileceğini açıklar.",
-    citation: "Kaynak gösterme stili",
-    formats: "Çıktı biçimleri",
-    latexHelp: "LaTeX istekleri kaynakçalı, tek renk A4 araştırma raporu ve SHA-256 manifesti oluşturur.",
-    reviewTitle: "Tarama sözleşmesini kontrol edin",
-    reviewHelp: "Bu seçimler değişmez bir istek revizyonuna dönüşür. Sonraki düzenlemeler yeni revizyon oluşturur; eski raporlar tekrarlanabilir kalır.",
-    inquiry: "Araştırma",
-    timing: "Zamanlama",
-    audience: "Okuyucu",
-    accessReview: "Erişim",
-    rankingReview: "Sıralama",
-    deliverables: "Çıktılar",
-    submitOne: "Kanıta kilitli raporu oluştur",
-    submitWatch: "Yinelenen izlemeyi kaydet",
-    savedTitle: "İstek kaydedildi",
-    preparedOne: "Sınırlandırılmış tarama tamamlandı; kanıta kilitli rapor eserleri yerel kasaya kaydedildi.",
-    savedOne: "Tek seferlik istek yerel alfa taslağı olarak saklandı ve tarama hizmeti için hazır.",
-    savedWatch: "Yinelenen izleme yerel alfa taslağı olarak saklandı ve zamanlayıcı için hazır.",
-    newRequest: "Yeni istek başlat",
-    localCaveat: "Alfa arayüzü: paketlenmiş uygulama kimliği doğrulanmış yerel API oturumunu sağlayana kadar bu ekran doğrulanmış isteği yerel olarak saklar.",
-    preparing: "Hazırlanıyor…",
-    submitFailed: "Kimliği doğrulanmış yerel hizmet bu isteği hazırlayamadı. Taslak inceleme için kayıtlı kaldı.",
-    preparationReceipt: "Rapor makbuzu",
-    preparationSha: "Hazırlama SHA-256",
-    resultSha: "Sonuç SHA-256",
-    fetched: "Çalışmalar",
-    included: "İddialar",
-    returned: "Kanıt alıntıları",
-    sourceState: "Oluşturulan eserler",
-    synthesis: "Sentez",
-    appliedCitation: "Uygulanan atıf biçimi",
-    artifactIntegrity: "Eser ve bildirim bütünlüğü",
-    formatIssues: "Oluşturulamayan istenen biçimler",
-    partialSources: "Kısmi kaynak hataları",
-    completeSources: "Seçili tüm kaynaklar yanıt verdi",
-    firstResults: "Kasa eserleri",
-    queuedRun: "İlk programlı çalışma sıraya alındı",
-    watchIdentifier: "İzleme tanımlayıcısı",
-    runIdentifier: "Çalışma tanımlayıcısı",
-    runStatus: "Çalışma durumu",
-  },
+  eyebrow: "Guided literature request",
+  title: "Build a report with explicit boundaries",
+  lede: "Litehouse asks the questions that change retrieval, ranking, evidence access, and the form of the final report.",
+  back: "Back to Today",
+  draft: "Draft saved on this device",
+  steps: ["Intent", "Coverage", "Reader", "Evidence", "Output", "Review"],
+  previous: "Previous",
+  next: "Continue",
+  required: "Complete the required choices before continuing.",
+  intentTitle: "What should Litehouse investigate?",
+  intentHelp: "State the concept in your own terms. Scope and exclusions prevent broad searches from drifting.",
+  mode: "Request type",
+  oneOff: "One-off report",
+  oneOffHelp: "Search once for the selected publication interval.",
+  watch: "Saved search — re-run manually while open",
+  watchHelp: "Run the bounded search now and save the definition. A static site has no background scheduler, so you re-run it yourself while Litehouse is open.",
+  topic: "Topic or research question",
+  topicPlaceholder: "e.g. How have artists used machine vision in documentary practice?",
+  scope: "Scope and concepts to include",
+  scopePlaceholder: "Populations, places, methods, theories, media, or adjacent terms…",
+  exclusions: "Exclusions",
+  exclusionsPlaceholder: "Terms, study designs, populations, or interpretations to leave out…",
+  coverageTitle: "Set the publication window and sources of variation",
+  interval: "Publication interval",
+  from: "From",
+  to: "To",
+  schedule: "Saved-search preferences (inert — no background delivery)",
+  frequency: "Frequency (label only)",
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  time: "Local time (label only)",
+  timezone: "Time zone (IANA, label only)",
+  languages: "Publication languages",
+  languageHelp: "English is selected by default. Select more than one when translated or multilingual work is in scope.",
+  disciplines: "Research fields",
+  disciplinesHelp: "Choose every field whose sources and work types should be searched.",
+  workTypes: "Work types",
+  readerTitle: "Calibrate the report to its reader",
+  expertise: "Ordered education and expertise",
+  expertiseHelp: "The first selection sets the primary reading level. Reorder the list to express mixed backgrounds.",
+  prior: "Prior knowledge and terminology",
+  priorPlaceholder: "Methods, theories, organisms, periods, software, or concepts the report may assume…",
+  moveUp: "Move up",
+  moveDown: "Move down",
+  evidenceTitle: "Choose access and ranking rules",
+  access: "Access policy",
+  openOnly: "Open full text only",
+  openOnlyHelp: "Retrieve and read full text only when access and reuse terms can be verified.",
+  includeAbstracts: "Include paywalled records as metadata and abstracts",
+  includeAbstractsHelp: "Explicit opt-in. Litehouse may summarize the available abstract, labels it abstract-only, and never tries to obtain paid full text.",
+  noBypass: "Litehouse never bypasses authentication, paywalls, access controls, or publisher terms.",
+  sources: "Scholarly sources",
+  ranking: "Impact-ranking intent",
+  rankingHelp: "Ranking changes reading order, not scientific truth. Every signal stays visible and separate from evidence strength.",
+  rankingTruth: "No citation, venue, or attention signal is treated as proof that a claim is true.",
+  outputTitle: "Shape the report",
+  depth: "Report depth",
+  brief: "Brief digest",
+  standard: "Standard review",
+  deep: "Deep review",
+  recommendations: "Include bounded reading recommendations",
+  recommendationsHelp: "Recommendations cite their evidence and explain why the work may merit closer reading.",
+  citation: "Reference style",
+  formats: "Output formats",
+  latexHelp: "LaTeX requests render to a monochrome A4 research report with references and a SHA-256 manifest.",
+  webFormatHelp: "The static web alpha currently exports verified Markdown and its JSON integrity manifest. LaTeX/PDF and plain-text renderers are not enabled yet.",
+  reviewTitle: "Review the retrieval contract",
+  reviewHelp: "These choices become an immutable request revision. Later edits create a new revision so prior reports remain reproducible.",
+  inquiry: "Inquiry",
+  timing: "Timing",
+  audience: "Audience",
+  accessReview: "Access",
+  rankingReview: "Ranking",
+  deliverables: "Deliverables",
+  submitOne: "Generate evidence-locked report",
+  submitWatch: "Run now and save this search",
+  savedTitle: "Request saved",
+  preparedOne: "The bounded search completed and its evidence-locked report artifacts were stored in the local vault.",
+  savedOne: "The one-off request was stored as a local alpha draft and is ready for the retrieval service.",
+  savedWatch: "The first report and reusable search definition were stored in this browser. Future runs must be started manually.",
+  newRequest: "Start another request",
+  localCaveat: "Web alpha: retrieval runs directly from this tab to the selected scholarly APIs. Reports stay in this browser. A static site has no background scheduler, so every future run of a saved search must be started manually while Litehouse is open.",
+  preparing: "Preparing…",
+  submitFailed: "The browser could not complete this bounded retrieval. The draft remains saved for review; source-level CORS failures are never silently replaced.",
+  downloadMarkdown: "Download verified Markdown",
+  storedInBrowser: "Stored in this browser vault",
+  preparationReceipt: "Report receipt",
+  preparationSha: "Preparation SHA-256",
+  resultSha: "Result SHA-256",
+  fetched: "Works",
+  included: "Claims",
+  returned: "Evidence excerpts",
+  sourceState: "Generated artifacts",
+  synthesis: "Synthesis",
+  appliedCitation: "Applied citation style",
+  artifactIntegrity: "Artifact and manifest integrity",
+  formatIssues: "Unavailable requested formats",
+  partialSources: "Partial source failures",
+  completeSources: "All selected sources responded",
+  firstResults: "Vault artifacts",
+  queuedRun: "First run completed",
+  watchIdentifier: "Saved-search identifier",
+  runIdentifier: "Run identifier",
+  runStatus: "Run status",
 } as const;
 
 const optionCopy = {
   languages: [
-    ["en", "English", "İngilizce"],
-    ["tr", "Turkish", "Türkçe"],
-    ["de", "German", "Almanca"],
-    ["fr", "French", "Fransızca"],
-    ["es", "Spanish", "İspanyolca"],
-    ["other", "Other", "Diğer"],
+    ["en", "English"],
+    ["tr", "Turkish"],
+    ["de", "German"],
+    ["fr", "French"],
+    ["es", "Spanish"],
+    ["other", "Other"],
   ],
   disciplines: [
-    ["humanities", "Humanities", "Beşeri bilimler"],
-    ["arts", "Arts and design", "Sanat ve tasarım"],
-    ["social-sciences", "Social sciences", "Sosyal bilimler"],
-    ["natural-sciences", "Natural sciences", "Doğa bilimleri"],
-    ["life-sciences", "Life sciences and health", "Yaşam bilimleri ve sağlık"],
-    ["technology", "Engineering and technology", "Mühendislik ve teknoloji"],
-    ["law-policy", "Law and policy", "Hukuk ve politika"],
-    ["interdisciplinary", "Interdisciplinary", "Disiplinlerarası"],
+    ["humanities", "Humanities"],
+    ["arts", "Arts and design"],
+    ["social-sciences", "Social sciences"],
+    ["natural-sciences", "Natural sciences"],
+    ["life-sciences", "Life sciences and health"],
+    ["technology", "Engineering and technology"],
+    ["law-policy", "Law and policy"],
+    ["interdisciplinary", "Interdisciplinary"],
   ],
   workTypes: [
-    ["journal-article", "Journal articles", "Dergi makaleleri"],
-    ["book-chapter", "Books and chapters", "Kitaplar ve bölümler"],
-    ["conference", "Conference papers", "Konferans bildirileri"],
-    ["preprint", "Preprints", "Ön baskılar"],
-    ["dataset", "Datasets", "Veri kümeleri"],
-    ["thesis", "Theses", "Tezler"],
-    ["report", "Reports and standards", "Raporlar ve standartlar"],
-    ["creative-work", "Creative works and catalogues", "Yaratıcı çalışmalar ve kataloglar"],
+    ["journal-article", "Journal articles"],
+    ["book-chapter", "Books and chapters"],
+    ["conference", "Conference papers"],
+    ["preprint", "Preprints"],
+    ["dataset", "Datasets"],
+    ["thesis", "Theses"],
+    ["report", "Reports and standards"],
+    ["creative-work", "Creative works and catalogues"],
   ],
   expertise: [
-    ["secondary", "Secondary education", "Ortaöğretim"],
-    ["undergraduate", "Undergraduate", "Lisans"],
-    ["masters", "Master's", "Yüksek lisans"],
-    ["doctoral", "Doctoral", "Doktora"],
-    ["postdoctoral", "Postdoctoral", "Doktora sonrası"],
-    ["faculty", "Faculty", "Öğretim üyesi"],
-    ["professional", "Professional practice", "Mesleki uygulama"],
-    ["independent", "Independent researcher", "Bağımsız araştırmacı"],
+    ["secondary", "Secondary education"],
+    ["undergraduate", "Undergraduate"],
+    ["masters", "Master's"],
+    ["doctoral", "Doctoral"],
+    ["postdoctoral", "Postdoctoral"],
+    ["faculty", "Faculty"],
+    ["professional", "Professional practice"],
+    ["independent", "Independent researcher"],
   ],
   sources: [
-    ["openalex", "OpenAlex", "OpenAlex"],
-    ["crossref", "Crossref", "Crossref"],
-    ["datacite", "DataCite", "DataCite"],
-    ["europe-pmc", "Europe PMC", "Europe PMC"],
-    ["semantic-scholar", "Semantic Scholar", "Semantic Scholar"],
-    ["library-of-congress", "Library of Congress", "Library of Congress"],
+    ["openalex", "OpenAlex"],
+    ["crossref", "Crossref"],
+    ["datacite", "DataCite"],
+    ["europe-pmc", "Europe PMC"],
+    ["semantic-scholar", "Semantic Scholar"],
+    ["library-of-congress", "Library of Congress"],
   ],
   ranking: [
-    ["recent-attention", "Recent scholarly attention", "Yakın dönem akademik ilgisi"],
-    ["normalized-influence", "Field- and age-normalized influence", "Alan ve yaşa göre normalleştirilmiş etki"],
-    ["seminal", "Seminal or field-forming work", "Kurucu veya alanı biçimlendiren çalışmalar"],
-    ["methodological", "Methodological relevance", "Yöntemsel ilgililik"],
-    ["open-coverage", "Broad and open coverage", "Geniş ve açık kapsam"],
+    ["recent-attention", "Recent scholarly attention"],
+    ["normalized-influence", "Field- and age-normalized influence"],
+    ["seminal", "Seminal or field-forming work"],
+    ["methodological", "Methodological relevance"],
+    ["open-coverage", "Broad and open coverage"],
   ],
   outputs: [
-    ["markdown", "Markdown (.md)", "Markdown (.md)"],
-    ["plain", "Plain text (.txt)", "Düz metin (.txt)"],
-    ["latex", "Rendered LaTeX (.pdf + .tex)", "İşlenmiş LaTeX (.pdf + .tex)"],
+    ["markdown", "Markdown (.md)"],
+    ["plain", "Plain text (.txt)"],
+    ["latex", "Rendered LaTeX (.pdf + .tex)"],
   ],
 } as const;
 
-function optionLabel(option: readonly [string, string, string], locale: "en" | "tr") {
-  return locale === "en" ? option[1] : option[2];
+function optionLabel(option: readonly [string, string]) {
+  return option[1];
 }
 
 function toggleValue(values: string[], value: string) {
@@ -529,59 +415,151 @@ function requestSucceeded(status: number) {
 
 /**
  * This is called only after the user confirms the immutable retrieval contract.
- * Browser development has an intentional local-only fallback; packaged builds
- * must use the authenticated native bridge and never silently downgrade on error.
+ * The static browser edition uses its explicit direct-fetch path. Native builds use
+ * the authenticated bridge and never silently downgrade to browser mode on error.
  */
+export interface ReportProgress {
+  phase: "retrieval" | "synthesis" | "finalizing";
+  label: string;
+  etaSeconds?: number;
+}
+
 export async function executeGuidedRequest(
   draft: WizardData,
+  onProgress?: (progress: ReportProgress) => void,
 ): Promise<SubmissionReceipt> {
-  if (!nativeApi.available) return { kind: "local" };
+  const selectedSources = draft.sources.filter(
+    (source): source is BrowserSourceId => BROWSER_SOURCES.has(source as BrowserSourceId),
+  );
+  onProgress?.({ phase: "retrieval", label: "Searching scholarly sources…" });
+  const retrieval = await searchLiterature({
+    query: [draft.topic.trim(), draft.scope.trim()].filter(Boolean).join(" "),
+    sources: selectedSources,
+    fromDate: draft.fromDate,
+    toDate: draft.toDate,
+    openAccessOnly: draft.accessPolicy === "open-only",
+    languages: draft.languages,
+    disciplines: draft.disciplines,
+    workTypes: draft.workTypes,
+    exclusions: draft.exclusions
+      .split(/[\n,;]+/u)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 30),
+    perSourceLimit: draft.depth === "brief" ? 8 : draft.depth === "deep" ? 25 : 15,
+  });
+  let llmSynthesis: string | undefined;
+  let synthesisFailure: string | undefined;
+  const maxTokens = draft.depth === "brief" ? 1_200 : draft.depth === "deep" ? 4_096 : 2_400;
+  const messages = [
+    { role: "system" as const, content: "You are an evidence-bound literature review assistant. Never use unstated knowledge and obey the source-citation contract exactly." },
+    { role: "user" as const, content: synthesisPrompt(draft.topic.trim(), retrieval.records) },
+  ];
+  const remote = getSessionRemoteProvider();
+  if (remote) {
+    onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the connected model…" });
+    try {
+      const generated = await generateWithRemoteProvider({
+        config: remote.config,
+        apiKey: remote.apiKey,
+        messages,
+        maxOutputTokens: maxTokens,
+      });
+      llmSynthesis = generated.text;
+    } catch (error) {
+      synthesisFailure = error instanceof RemoteProviderError ? error.code : "unknown";
+    }
+  } else if (browserModelRuntime.getSnapshot().phase === "ready") {
+    const startedAt = Date.now();
+    onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the on-device model…" });
+    try {
+      llmSynthesis = await browserModelRuntime.completeChat(messages, {
+        maxTokens,
+        temperature: 0,
+        onToken: (tokens) => {
+          const elapsed = (Date.now() - startedAt) / 1000;
+          const rate = tokens / Math.max(elapsed, 0.1);
+          const etaSeconds = tokens > 6 && rate > 0.3 ? Math.round(Math.max(0, maxTokens - tokens) / rate) : undefined;
+          onProgress?.({ phase: "synthesis", label: `Writing the synthesis · ${tokens} tokens`, etaSeconds });
+        },
+      });
+    } catch {
+      synthesisFailure = "browser-model-generation";
+    }
+  }
+  onProgress?.({ phase: "finalizing", label: "Assembling and verifying the report…" });
+  const report = await createGroundedReport({
+    query: draft.topic.trim(),
+    retrieval,
+    llmSynthesis,
+    synthesisFailure,
+  });
+  await saveBrowserReport(report);
+  if (draft.mode === "one-off") return { kind: "browser", report };
 
   const specification = buildApiSpecification(draft);
-  if (draft.mode === "one-off") {
-    const response = await nativeApi.request<GeneratedReportReceipt>(
-      "POST",
-      "/v1/reports/generate",
-      { specification, max_results: 25 },
-    );
-    if (!requestSucceeded(response.status)) {
-      throw new Error("Report generation was not accepted.");
-    }
-    return { kind: "generated", report: response.body };
-  }
-
-  const created = await nativeApi.request<{ id: string }>("POST", "/v1/watches", {
+  const specificationSha256 = await digestCanonical(specification);
+  const watchId = `web-${specificationSha256.slice(0, 20)}`;
+  const watch = {
+    id: watchId,
     name: draft.topic.trim().slice(0, 160),
     specification,
-    enabled: true,
-  });
-  if (!requestSucceeded(created.status) || !created.body.id) {
-    throw new Error("Watch creation was not accepted.");
+    specificationSha256,
+    createdAt: new Date().toISOString(),
+    lastReportId: report.id,
+    executionPolicy: "manual-while-open",
+  };
+  let watches: unknown[] = [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem("litehouse.browser-watches.v1") ?? "[]");
+    if (Array.isArray(parsed)) watches = parsed;
+  } catch {
+    watches = [];
   }
-  const watchId = created.body.id;
-  const queued = await nativeApi.request<{
-    run: { id: string; status: string };
-  }>("POST", `/v1/watches/${encodeURIComponent(watchId)}/runs`, {});
-  if (!requestSucceeded(queued.status) || !queued.body.run?.id) {
-    throw new Error("The first watch run was not queued.");
-  }
+  window.localStorage.setItem(
+    "litehouse.browser-watches.v1",
+    JSON.stringify([...watches.filter((item) => objectWatchId(item) !== watchId), watch]),
+  );
   return {
     kind: "watch",
     watchId,
-    runId: queued.body.run.id,
-    runStatus: queued.body.run.status,
+    runId: report.id,
+    runStatus: "succeeded · future runs require a manual review while Litehouse is open",
+    browserReport: report,
   };
 }
 
+function objectWatchId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
+}
+
+function downloadReportFile(report: GroundedReport, ext: "md" | "tex"): void {
+  const value = ext === "tex" ? reportToLatex(report) : report.markdown;
+  const type = ext === "tex" ? "application/x-tex" : "text/markdown";
+  const blob = new Blob([value], { type: `${type};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `litehouse-${report.id}.${ext}`;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function downloadBrowserMarkdown(report: GroundedReport): void {
+  downloadReportFile(report, "md");
+}
+
 export function ReportWizardPage() {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const c = copy;
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<WizardData>(readDraft);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);
+  const [progress, setProgress] = useState<ReportProgress | null>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
@@ -601,12 +579,12 @@ export function ReportWizardPage() {
   function validCurrentStep() {
     if (step === 0) return draft.topic.trim().length >= 3;
     if (step === 1) {
+      // Schedule inputs are inert on a static site, so they are never required.
       return Boolean(
         draft.fromDate &&
           draft.toDate &&
           draft.fromDate <= draft.toDate &&
-          draft.languages.length &&
-          (draft.mode === "one-off" || (draft.deliveryTime && draft.timezone.trim())),
+          draft.languages.length,
       );
     }
     if (step === 2) return Boolean(draft.disciplines.length && draft.workTypes.length && draft.expertise.length);
@@ -630,21 +608,35 @@ export function ReportWizardPage() {
     setSubmitting(true);
     setError("");
     try {
-      const nextReceipt = await executeGuidedRequest(draft);
-      const stored = {
-        ...draft,
-        savedAt: new Date().toISOString(),
-        revision: 1,
-        submission: nextReceipt,
-      };
-      window.localStorage.setItem("litehouse.saved-request.v1", JSON.stringify(stored));
+      const nextReceipt = await executeGuidedRequest(draft, setProgress);
+      // executeGuidedRequest already persisted the full report to the vault, so the
+      // request is complete here. Register success before touching saved-request.v1.
       setReceipt(nextReceipt);
       setSaved(true);
+      // Best-effort breadcrumb only. Storing the full report can exceed the quota;
+      // that must never be reported as a generation failure, so it is isolated.
+      const report =
+        nextReceipt.kind === "browser" ? nextReceipt.report : nextReceipt.browserReport;
+      try {
+        window.localStorage.setItem(
+          "litehouse.saved-request.v1",
+          JSON.stringify({
+            reportId: report?.id,
+            query: draft.topic.trim(),
+            reportSha256: report?.reportSha256,
+            savedAt: new Date().toISOString(),
+            revision: 1,
+          }),
+        );
+      } catch {
+        // Quota or serialization failure on the breadcrumb is non-fatal.
+      }
     } catch {
       setError(c.submitFailed);
       window.setTimeout(() => errorRef.current?.focus(), 0);
     } finally {
       setSubmitting(false);
+      setProgress(null);
     }
   }
 
@@ -652,7 +644,7 @@ export function ReportWizardPage() {
     const labels = (group: keyof typeof optionCopy, values: string[]) =>
       optionCopy[group]
         .filter((option) => values.includes(option[0]))
-        .map((option) => optionLabel(option, locale))
+        .map((option) => optionLabel(option))
         .join(", ");
     return {
       disciplines: labels("disciplines", draft.disciplines),
@@ -662,7 +654,7 @@ export function ReportWizardPage() {
       ranking: labels("ranking", draft.ranking),
       outputs: labels("outputs", draft.outputs),
     };
-  }, [draft, locale]);
+  }, [draft]);
 
   return (
     <main id="main-content" className="page lh-wizard-page" tabIndex={-1}>
@@ -677,18 +669,18 @@ export function ReportWizardPage() {
       </header>
 
       <div className="lh-wizard-shell">
-        <nav className="lh-step-progress" aria-label={locale === "en" ? "Report request progress" : "Rapor isteği ilerlemesi"}>
-          <span>{locale === "en" ? `Step ${step + 1} of ${steps.length}` : `${steps.length} adımın ${step + 1}. adımı`}</span>
+        <nav className="lh-step-progress" aria-label="Report request progress">
+          <span>{`Step ${step + 1} of ${steps.length}`}</span>
           <strong aria-current="step">{c.steps[step]}</strong>
-          <progress value={step + 1} max={steps.length} aria-label={locale === "en" ? "Report request completion" : "Rapor isteği tamamlanma durumu"} />
+          <progress value={step + 1} max={steps.length} aria-label="Report request completion" />
         </nav>
 
         <form className="lh-wizard-form" onSubmit={(event) => event.preventDefault()}>
           {step === 0 && <IntentStep c={c} draft={draft} update={update} />}
-          {step === 1 && <CoverageStep c={c} locale={locale} draft={draft} update={update} />}
-          {step === 2 && <ReaderStep c={c} locale={locale} draft={draft} update={update} />}
-          {step === 3 && <EvidenceStep c={c} locale={locale} draft={draft} update={update} />}
-          {step === 4 && <OutputStep c={c} locale={locale} draft={draft} update={update} />}
+          {step === 1 && <CoverageStep c={c} draft={draft} update={update} />}
+          {step === 2 && <ReaderStep c={c} draft={draft} update={update} />}
+          {step === 3 && <EvidenceStep c={c} draft={draft} update={update} />}
+          {step === 4 && <OutputStep c={c} draft={draft} update={update} />}
           {step === 5 && (
             <ReviewStep
               c={c}
@@ -696,6 +688,7 @@ export function ReportWizardPage() {
               labels={selectedLabels}
               saved={saved}
               submitting={submitting}
+              progress={progress}
               receipt={receipt}
               onSubmit={submit}
               onRestart={() => {
@@ -725,7 +718,7 @@ export function ReportWizardPage() {
   );
 }
 
-type Copy = (typeof copy)["en"] | (typeof copy)["tr"];
+type Copy = typeof copy;
 type Update = <K extends keyof WizardData>(key: K, value: WizardData[K]) => void;
 
 function IntentStep({ c, draft, update }: { c: Copy; draft: WizardData; update: Update }) {
@@ -750,7 +743,7 @@ function IntentStep({ c, draft, update }: { c: Copy; draft: WizardData; update: 
   );
 }
 
-function CoverageStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"; draft: WizardData; update: Update }) {
+function CoverageStep({ c, draft, update }: { c: Copy; draft: WizardData; update: Update }) {
   return (
     <WizardSection title={c.coverageTitle} index="02">
       <fieldset className="lh-fieldset">
@@ -770,12 +763,12 @@ function CoverageStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "t
           </div>
         </fieldset>
       )}
-      <CheckboxGroup legend={c.languages} help={c.languageHelp} options={optionCopy.languages} values={draft.languages} locale={locale} onChange={(value) => update("languages", toggleValue(draft.languages, value))} />
+      <CheckboxGroup legend={c.languages} help={c.languageHelp} options={optionCopy.languages} values={draft.languages} onChange={(value) => update("languages", toggleValue(draft.languages, value))} />
     </WizardSection>
   );
 }
 
-function ReaderStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"; draft: WizardData; update: Update }) {
+function ReaderStep({ c, draft, update }: { c: Copy; draft: WizardData; update: Update }) {
   function move(index: number, offset: -1 | 1) {
     const next = [...draft.expertise];
     const target = index + offset;
@@ -785,8 +778,8 @@ function ReaderStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"
   }
   return (
     <WizardSection title={c.readerTitle} index="03">
-      <CheckboxGroup legend={c.disciplines} help={c.disciplinesHelp} options={optionCopy.disciplines} values={draft.disciplines} locale={locale} onChange={(value) => update("disciplines", toggleValue(draft.disciplines, value))} />
-      <CheckboxGroup legend={c.workTypes} options={optionCopy.workTypes} values={draft.workTypes} locale={locale} onChange={(value) => update("workTypes", toggleValue(draft.workTypes, value))} />
+      <CheckboxGroup legend={c.disciplines} help={c.disciplinesHelp} options={optionCopy.disciplines} values={draft.disciplines} onChange={(value) => update("disciplines", toggleValue(draft.disciplines, value))} />
+      <CheckboxGroup legend={c.workTypes} options={optionCopy.workTypes} values={draft.workTypes} onChange={(value) => update("workTypes", toggleValue(draft.workTypes, value))} />
       <fieldset className="lh-fieldset">
         <legend>{c.expertise}</legend>
         <p className="lh-field-help">{c.expertiseHelp}</p>
@@ -795,7 +788,7 @@ function ReaderStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"
             {optionCopy.expertise.map((option) => (
               <label className="lh-checkbox" key={option[0]}>
                 <input type="checkbox" checked={draft.expertise.includes(option[0])} onChange={() => update("expertise", toggleValue(draft.expertise, option[0]))} />
-                <span>{optionLabel(option, locale)}</span>
+                <span>{optionLabel(option)}</span>
               </label>
             ))}
           </div>
@@ -804,7 +797,7 @@ function ReaderStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"
               const option = optionCopy.expertise.find((item) => item[0] === value);
               return (
                 <li key={value}>
-                  <span><b>{index + 1}</b>{option ? optionLabel(option, locale) : value}</span>
+                  <span><b>{index + 1}</b>{option ? optionLabel(option) : value}</span>
                   <span>
                     <button type="button" onClick={() => move(index, -1)} disabled={index === 0}><ArrowUp aria-hidden="true" size={15} /><span className="sr-only">{c.moveUp}</span></button>
                     <button type="button" onClick={() => move(index, 1)} disabled={index === draft.expertise.length - 1}><ArrowDown aria-hidden="true" size={15} /><span className="sr-only">{c.moveDown}</span></button>
@@ -820,7 +813,7 @@ function ReaderStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"
   );
 }
 
-function EvidenceStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"; draft: WizardData; update: Update }) {
+function EvidenceStep({ c, draft, update }: { c: Copy; draft: WizardData; update: Update }) {
   return (
     <WizardSection title={c.evidenceTitle} index="04">
       <fieldset className="lh-fieldset">
@@ -831,14 +824,15 @@ function EvidenceStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "t
         </div>
         <p className="lh-safety-note"><ShieldCheck aria-hidden="true" size={18} /> {c.noBypass}</p>
       </fieldset>
-      <CheckboxGroup legend={c.sources} options={optionCopy.sources} values={draft.sources} locale={locale} onChange={(value) => update("sources", toggleValue(draft.sources, value))} />
-      <CheckboxGroup legend={c.ranking} help={c.rankingHelp} options={optionCopy.ranking} values={draft.ranking} locale={locale} onChange={(value) => update("ranking", toggleValue(draft.ranking, value))} />
+      <CheckboxGroup legend={c.sources} options={optionCopy.sources} values={draft.sources} onChange={(value) => update("sources", toggleValue(draft.sources, value))} />
+      <CheckboxGroup legend={c.ranking} help={c.rankingHelp} options={optionCopy.ranking} values={draft.ranking} onChange={(value) => update("ranking", toggleValue(draft.ranking, value))} />
       <p className="lh-ranking-note"><Info aria-hidden="true" size={18} /> {c.rankingTruth}</p>
     </WizardSection>
   );
 }
 
-function OutputStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"; draft: WizardData; update: Update }) {
+function OutputStep({ c, draft, update }: { c: Copy; draft: WizardData; update: Update }) {
+  const outputOptions = optionCopy.outputs.slice(0, 1);
   return (
     <WizardSection title={c.outputTitle} index="05">
       <fieldset className="lh-fieldset">
@@ -849,7 +843,8 @@ function OutputStep({ c, locale, draft, update }: { c: Copy; locale: "en" | "tr"
       </fieldset>
       <label className="lh-checkbox lh-feature-check"><input type="checkbox" checked={draft.recommendations} onChange={(event) => update("recommendations", event.target.checked)} /><span><b>{c.recommendations}</b><small>{c.recommendationsHelp}</small></span></label>
       <label className="lh-field lh-select-field"><span>{c.citation}</span><select value={draft.citation} onChange={(event) => update("citation", event.target.value)}><option value="apa-7">APA 7</option><option value="ieee">IEEE</option><option value="chicago-author-date">Chicago author–date</option><option value="mla-9">MLA 9</option><option value="vancouver">Vancouver</option><option value="harvard-cite-them-right">Harvard</option></select></label>
-      <CheckboxGroup legend={c.formats} options={optionCopy.outputs} values={draft.outputs} locale={locale} onChange={(value) => update("outputs", toggleValue(draft.outputs, value))} />
+      <CheckboxGroup legend={c.formats} options={outputOptions} values={draft.outputs} onChange={(value) => update("outputs", toggleValue(draft.outputs, value))} />
+      <p className="lh-safety-note"><FileCheck2 aria-hidden="true" size={18} /> {c.webFormatHelp}</p>
       {draft.outputs.includes("latex") && <p className="lh-safety-note"><FileCheck2 aria-hidden="true" size={18} /> {c.latexHelp}</p>}
     </WizardSection>
   );
@@ -861,6 +856,7 @@ function ReviewStep({
   labels,
   saved,
   submitting,
+  progress,
   receipt,
   onSubmit,
   onRestart,
@@ -870,6 +866,7 @@ function ReviewStep({
   labels: Record<string, string>;
   saved: boolean;
   submitting: boolean;
+  progress: ReportProgress | null;
   receipt: SubmissionReceipt | null;
   onSubmit: () => Promise<void>;
   onRestart: () => void;
@@ -879,66 +876,56 @@ function ReviewStep({
       <section className="lh-saved-request" aria-labelledby="saved-request-title">
         <span className="lh-success-seal"><Check aria-hidden="true" size={28} /></span>
         <p className="section-index">
-          06{receipt?.kind === "generated" ? ` · ${receipt.report.result_sha256.slice(0, 12)}` : ""}
+          06{receipt?.kind === "browser" ? ` · ${receipt.report.reportSha256.slice(0, 12)}` : ""}
         </p>
         <h2 id="saved-request-title">{c.savedTitle}</h2>
         <p>
-          {receipt?.kind === "generated"
+          {receipt?.kind === "browser"
             ? c.preparedOne
             : receipt?.kind === "watch"
               ? c.queuedRun
               : draft.mode === "watch" ? c.savedWatch : c.savedOne}
         </p>
 
-        {receipt?.kind === "generated" && (
+        {receipt?.kind === "browser" && (
           <div className="lh-preparation-receipt" aria-label={c.preparationReceipt}>
             <h3>{c.preparationReceipt}</h3>
             <dl className="lh-preparation-stats">
-              <div><dt>{c.fetched}</dt><dd>{receipt.report.work_count}</dd></div>
-              <div><dt>{c.included}</dt><dd>{receipt.report.claim_count}</dd></div>
-              <div><dt>{c.returned}</dt><dd>{receipt.report.abstract_evidence_count + receipt.report.full_text_evidence_count}</dd></div>
-              <div><dt>{c.sourceState}</dt><dd>{receipt.report.artifacts.length}</dd></div>
+              <div><dt>{c.fetched}</dt><dd>{receipt.report.records.length}</dd></div>
+              <div><dt>{c.synthesis}</dt><dd>{receipt.report.synthesis}</dd></div>
+              <div><dt>{c.partialSources}</dt><dd>{receipt.report.sourceFailures.length}</dd></div>
+              <div><dt>{c.sourceState}</dt><dd>{c.storedInBrowser}</dd></div>
             </dl>
-            <p className="lh-receipt-sources"><b>{c.synthesis}</b><span>{receipt.report.synthesis_status}</span></p>
-            <p className="lh-receipt-sources"><b>{c.appliedCitation}</b><span>{receipt.report.applied_citation_style}</span></p>
             <details className="lh-receipt-details">
               <summary>{c.artifactIntegrity}</summary>
-              <p className="lh-receipt-sha"><b>{c.resultSha}</b><code>{receipt.report.result_sha256}</code></p>
-              <p className="lh-receipt-sha"><b>{c.preparationSha}</b><code>{receipt.report.preparation_sha256}</code></p>
-              {receipt.report.source_errors.length > 0 ? (
-                <div className="lh-partial-errors">
-                  <b>{c.partialSources}</b>
-                  <ul>{receipt.report.source_errors.map((sourceError) => <li key={`${sourceError.source}-${sourceError.code}`}>{sourceError.source} · {sourceError.code}</li>)}</ul>
-                </div>
+              <p className="lh-receipt-sha"><b>{c.resultSha}</b><code>{receipt.report.reportSha256}</code></p>
+              <p className="lh-receipt-sha"><b>{c.preparationSha}</b><code>{receipt.report.retrievalSha256}</code></p>
+              {receipt.report.sourceFailures.length > 0 ? (
+                <div className="lh-partial-errors"><b>{c.partialSources}</b><ul>{receipt.report.sourceFailures.map(({ source, errorCode }) => <li key={`${source}-${errorCode}`}>{source} · {errorCode}</li>)}</ul></div>
               ) : <p className="lh-complete-sources">{c.completeSources}</p>}
-              {receipt.report.format_errors.length > 0 && (
-                <div className="lh-partial-errors"><b>{c.formatIssues}</b><ul>{receipt.report.format_errors.map((code) => <li key={code}>{code}</li>)}</ul></div>
-              )}
-              <p className="lh-ranking-note"><Info aria-hidden="true" size={18} /> {c.rankingTruth}</p>
-              {receipt.report.artifacts.length > 0 && (
-                <div className="lh-first-results">
-                  <b>{c.firstResults}</b>
-                  <ol>{receipt.report.artifacts.map((artifact) => (
-                    <li key={artifact.artifact_id}>
-                      <span>{artifact.output_format} · {(artifact.size / 1024).toFixed(1)} KiB</span>
-                      <small>{c.artifactIntegrity}: {artifact.artifact_sha256.slice(0, 16)}…{artifact.manifest_sha256 ? ` / ${artifact.manifest_sha256.slice(0, 16)}…` : ""}</small>
-                    </li>
-                  ))}</ol>
-                </div>
-              )}
             </details>
+            <div className="lh-inline-actions">
+              <button className="button button-primary" type="button" onClick={() => downloadBrowserMarkdown(receipt.report)}>
+                <FileCheck2 aria-hidden="true" size={17} /> {c.downloadMarkdown}
+              </button>
+              <button className="button button-secondary" type="button" onClick={() => downloadReportFile(receipt.report, "tex")}>
+                <FileCheck2 aria-hidden="true" size={17} /> Download LaTeX
+              </button>
+            </div>
           </div>
         )}
 
         {receipt?.kind === "watch" && (
-          <dl className="lh-watch-receipt" aria-label={c.queuedRun}>
-            <div><dt>{c.watchIdentifier}</dt><dd><code>{receipt.watchId}</code></dd></div>
-            <div><dt>{c.runIdentifier}</dt><dd><code>{receipt.runId}</code></dd></div>
-            <div><dt>{c.runStatus}</dt><dd>{receipt.runStatus}</dd></div>
-          </dl>
+          <>
+            <dl className="lh-watch-receipt" aria-label={c.queuedRun}>
+              <div><dt>{c.watchIdentifier}</dt><dd><code>{receipt.watchId}</code></dd></div>
+              <div><dt>{c.runIdentifier}</dt><dd><code>{receipt.runId}</code></dd></div>
+              <div><dt>{c.runStatus}</dt><dd>{receipt.runStatus}</dd></div>
+            </dl>
+            {receipt.browserReport && <button className="button button-primary" type="button" onClick={() => downloadBrowserMarkdown(receipt.browserReport!)}><FileCheck2 aria-hidden="true" size={17} /> {c.downloadMarkdown}</button>}
+          </>
         )}
 
-        {receipt?.kind === "local" && <p className="lh-local-caveat">{c.localCaveat}</p>}
         <button className="button button-secondary" type="button" onClick={onRestart}>{c.newRequest}</button>
       </section>
     );
@@ -953,7 +940,12 @@ function ReviewStep({
         <div><dt>{c.rankingReview}</dt><dd>{labels.ranking}<span>{c.rankingTruth}</span></dd></div>
         <div><dt>{c.deliverables}</dt><dd>{labels.outputs}<span>{draft.citation} · {c[draft.depth]} · {draft.recommendations ? c.recommendations : "—"}</span></dd></div>
       </dl>
-      {!nativeApi.available && <p className="lh-local-caveat">{c.localCaveat}</p>}
+      <p className="lh-local-caveat">{c.localCaveat}</p>
+      {submitting && progress && (
+        <p className="lh-report-progress" role="status" aria-live="polite">
+          {progress.label}{progress.etaSeconds !== undefined ? ` — about ${progress.etaSeconds}s remaining` : ""}
+        </p>
+      )}
       <button className="button button-primary lh-submit-request" type="button" onClick={() => void onSubmit()} disabled={submitting}>
         <FileCheck2 aria-hidden="true" size={18} />
         {submitting ? c.preparing : draft.mode === "watch" ? c.submitWatch : c.submitOne}
@@ -970,13 +962,13 @@ function OptionCard({ checked, name, value, label, help, onChange }: { checked: 
   return <label className={`lh-option-card${checked ? " is-selected" : ""}`}><input type="radio" name={name} value={value} checked={checked} onChange={onChange} /><span className="lh-option-mark" aria-hidden="true">{checked ? "■" : "□"}</span><span><b>{label}</b>{help && <small>{help}</small>}</span></label>;
 }
 
-function CheckboxGroup({ legend, help, options, values, locale, onChange }: { legend: string; help?: string; options: readonly (readonly [string, string, string])[]; values: string[]; locale: "en" | "tr"; onChange: (value: string) => void }) {
+function CheckboxGroup({ legend, help, options, values, onChange }: { legend: string; help?: string; options: readonly (readonly [string, string])[]; values: string[]; onChange: (value: string) => void }) {
   return (
     <fieldset className="lh-fieldset">
       <legend>{legend}</legend>
       {help && <p className="lh-field-help">{help}</p>}
       <div className="lh-check-grid">
-        {options.map((option) => <label className="lh-checkbox" key={option[0]}><input type="checkbox" checked={values.includes(option[0])} onChange={() => onChange(option[0])} /><span>{optionLabel(option, locale)}</span></label>)}
+        {options.map((option) => <label className="lh-checkbox" key={option[0]}><input type="checkbox" checked={values.includes(option[0])} onChange={() => onChange(option[0])} /><span>{optionLabel(option)}</span></label>)}
       </div>
     </fieldset>
   );

@@ -541,7 +541,7 @@ details[open] > summary::after {
 
 .evidence-inspector {
   inset-block-start: 80px;
-  max-height: calc(100vh - 96px);
+  max-height: calc(100dvh - 96px);
   padding: 18px;
 }
 
@@ -920,7 +920,7 @@ details[open] > summary::after {
 
 .lh-library-export-dialog {
   width: min(720px, 100%);
-  max-height: min(760px, calc(100vh - 48px));
+  max-height: min(760px, calc(100dvh - 48px));
   overflow: auto;
   border: 1px solid var(--line-strong);
   background: var(--canvas);
@@ -1078,7 +1078,7 @@ html[data-motion="reduced"] *::after {
 
 @media (max-width: 860px) {
   body {
-    padding-block-end: 68px;
+    padding-block-end: calc(68px + env(safe-area-inset-bottom, 0px));
   }
 
   .masthead {
@@ -1086,7 +1086,8 @@ html[data-motion="reduced"] *::after {
   }
 
   .primary-nav {
-    height: 68px;
+    inset: auto 0 0;
+    height: calc(68px + env(safe-area-inset-bottom, 0px));
   }
 
   .page {

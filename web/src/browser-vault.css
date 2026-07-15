@@ -1,0 +1,132 @@
+.browser-report-list h3 a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-decoration-color: transparent;
+  text-underline-offset: 4px;
+}
+
+.browser-report-list h3 a:hover {
+  text-decoration-color: currentColor;
+}
+
+.browser-report-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-start: 12px;
+}
+
+.browser-report-card-actions details {
+  max-width: 100%;
+  color: var(--ink-faint);
+  font-size: 0.76rem;
+}
+
+.browser-report-card-actions code,
+.browser-watch-list code {
+  overflow-wrap: anywhere;
+}
+
+.browser-report-page .report-header {
+  align-items: end;
+}
+
+.browser-report-page .native-today-state h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  line-height: 1;
+}
+
+.browser-report-document {
+  max-width: 900px;
+  margin-block: clamp(34px, 5vw, 64px);
+}
+
+.browser-report-copy {
+  max-width: 76ch;
+  margin-inline: auto;
+  font-family: var(--serif);
+  font-size: clamp(1.05rem, 1.5vw, 1.2rem);
+  line-height: 1.68;
+}
+
+.browser-report-copy h2,
+.browser-report-copy h3 {
+  break-after: avoid;
+  margin-block: 2em 0.55em;
+}
+
+.browser-report-copy p {
+  orphans: 3;
+  widows: 3;
+}
+
+.browser-report-bullet,
+.browser-report-reference {
+  padding-inline-start: 1.3rem;
+  text-indent: -1.3rem;
+}
+
+.browser-report-sources {
+  max-width: 900px;
+  padding-block-start: 32px;
+  border-block-start: 1px solid var(--line);
+}
+
+.browser-report-sources > h2 {
+  margin-block-start: 0;
+}
+
+.browser-report-sources ol {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  list-style: none;
+  border-block-start: 1px solid var(--line);
+}
+
+.browser-report-sources li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px;
+  align-items: start;
+  padding-block: 14px;
+  border-block-end: 1px solid var(--line);
+}
+
+.browser-report-sources li > span {
+  min-width: 0;
+}
+
+.browser-report-sources li > span b {
+  margin-inline-end: 8px;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.browser-report-sources a {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .browser-report-sources li {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .browser-report-card-actions {
+    align-items: start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-report-list h3 a {
+    scroll-behavior: auto;
+  }
+}

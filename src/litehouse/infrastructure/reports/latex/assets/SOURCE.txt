@@ -1,6 +1,0 @@
-Font: EB Garamond variable (upright and italic)
-License: SIL Open Font License 1.1 (see OFL.txt)
-Source: https://github.com/google/fonts/tree/03781cf7a714af8431d14b6f337f923c774429d7/ofl/ebgaramond
-Commit: 03781cf7a714af8431d14b6f337f923c774429d7
-Upright SHA-256: ef9512f92f6d579e5dc75af59a5a4b1b8b47d2eda89e00b954d44520e5369027
-Italic SHA-256: bba2c4499c93c9612b90b9825d32b07da52fce2fe57562a1eb6b833553f93c4e

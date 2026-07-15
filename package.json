@@ -7,15 +7,9 @@
   ],
   "scripts": {
     "build": "npm --workspace web run build",
-    "desktop:dev": "tauri dev",
-    "desktop:build": "node scripts/tauri-build.mjs",
-    "desktop:icons": "tauri icon assets/brand/png/litehouse-lettermark-light.png",
     "dev": "npm --workspace web run dev",
     "test": "npm --workspace web run test",
     "typecheck": "npm --workspace web run typecheck"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "2.11.4"
   },
   "engines": {
     "node": ">=22.12.0"

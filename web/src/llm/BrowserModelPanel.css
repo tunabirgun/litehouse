@@ -1,0 +1,229 @@
+.lh-browser-model {
+  display: grid;
+  gap: 1rem;
+  padding: 1.1rem;
+  border: 1px solid var(--border-subtle, color-mix(in srgb, currentColor 18%, transparent));
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--surface, Canvas) 96%, currentColor 4%);
+}
+
+.lh-browser-model-heading {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.lh-browser-model-heading h3,
+.lh-browser-model-heading p {
+  margin: 0;
+}
+
+.lh-browser-model-heading > div > p:last-child {
+  margin-top: 0.2rem;
+  color: var(--text-muted, color-mix(in srgb, currentColor 68%, transparent));
+  font-size: 0.9rem;
+}
+
+.lh-browser-model-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid var(--border-subtle, color-mix(in srgb, currentColor 18%, transparent));
+  border-radius: 50%;
+}
+
+.lh-browser-model-local {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  white-space: nowrap;
+  color: var(--text-muted, currentColor);
+  font-size: 0.75rem;
+}
+
+.lh-browser-model-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.lh-browser-model-choices legend {
+  margin-bottom: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lh-browser-model-choice {
+  display: block;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle, color-mix(in srgb, currentColor 18%, transparent));
+  border-radius: 0.65rem;
+  cursor: pointer;
+}
+
+.lh-browser-model-choice.is-selected {
+  border-color: currentColor;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.lh-browser-model-choice.is-constrained:not(.is-selected) {
+  opacity: 0.55;
+}
+
+.lh-browser-model-choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lh-browser-model-choice > span,
+.lh-browser-model-choice-title {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.lh-browser-model-choice-title {
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+}
+
+.lh-browser-model-choice-title small {
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--border-subtle, color-mix(in srgb, currentColor 20%, transparent));
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.lh-browser-model-choice > span > span:not(.lh-browser-model-choice-title),
+.lh-browser-model-choice em {
+  color: var(--text-muted, color-mix(in srgb, currentColor 68%, transparent));
+  font-size: 0.77rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.lh-browser-model-measure {
+  font-variant-numeric: tabular-nums;
+}
+
+.lh-browser-model-status {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-subtle, color-mix(in srgb, currentColor 13%, transparent));
+}
+
+.lh-browser-model-status > div {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.lh-browser-model-status span {
+  display: grid;
+}
+
+.lh-browser-model-status small,
+.lh-browser-model-fineprint {
+  color: var(--text-muted, color-mix(in srgb, currentColor 65%, transparent));
+  font-size: 0.76rem;
+}
+
+.lh-browser-model-status progress {
+  width: 100%;
+  height: 0.35rem;
+  accent-color: currentColor;
+}
+
+.lh-browser-model-error,
+.lh-browser-model-unsupported {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border-left: 2px solid currentColor;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  font-size: 0.88rem;
+}
+
+.lh-browser-model-actions {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.lh-browser-model-refresh {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lh-browser-model-link {
+  color: inherit;
+  font-size: 0.85rem;
+  text-underline-offset: 0.2em;
+}
+
+.lh-browser-model-details {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle, color-mix(in srgb, currentColor 13%, transparent));
+  font-size: 0.82rem;
+}
+
+.lh-browser-model-details summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.lh-browser-model-details dl {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.8rem 0;
+}
+
+.lh-browser-model-details dl > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.45fr) 1fr;
+  gap: 0.7rem;
+}
+
+.lh-browser-model-details dt {
+  color: var(--text-muted, color-mix(in srgb, currentColor 65%, transparent));
+}
+
+.lh-browser-model-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lh-browser-model-details p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .lh-browser-model-choices {
+    grid-template-columns: 1fr;
+  }
+
+  .lh-browser-model-heading {
+    grid-template-columns: auto 1fr;
+  }
+
+  .lh-browser-model-local {
+    grid-column: 2;
+  }
+}

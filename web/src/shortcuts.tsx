@@ -10,8 +10,6 @@ import {
   useState,
 } from "react";
 
-import { nativeApi, NATIVE_MENU_COMMAND_IDS } from "./native";
-
 export type ShortcutPlatform = "mac" | "windows-linux";
 export type ShortcutCategory = "navigation" | "research" | "reader" | "library" | "application";
 
@@ -57,36 +55,29 @@ const NAMED_KEYS = new Set([
   "Equal", "Escape", "Home", "Insert", "Minus", "PageDown", "PageUp", "Period",
   "Plus", "Quote", "Semicolon", "Slash", "Space", "Tab",
 ]);
+// Browser-owned combos a web page must never hijack. Scoped to the host
+// browser (tabs, address bar, find, print, save, zoom, tab-switch), not a
+// native desktop shell. Entries are pre-normalised (MODIFIER_ORDER form).
+// Browser/OS combos that are harmful to hijack. Mod+1..9 is intentionally NOT
+// reserved: overriding it for in-app section navigation is an accepted web-app
+// pattern. A shipped default equal to any reserved combo is ignored (never fires
+// or preventDefaults), keeping browser save/find/close/reload etc. intact.
 const RESERVED_BINDINGS = new Set([
-  "Mod+A",
-  "Mod+C",
-  "Mod+X",
-  "Mod+V",
-  "Mod+Z",
-  "Mod+Y",
-  "Mod+Shift+Z",
-  "Mod+Q",
+  "Mod+T",
+  "Mod+Shift+T",
+  "Mod+N",
   "Mod+W",
-  "Mod+Shift+W",
-  "Mod+Alt+W",
-  "Mod+H",
-  "Mod+Alt+H",
-  "Mod+M",
-  "Mod+Ctrl+F",
-  "Mod+Alt+Escape",
-  "Mod+Space",
-  "Mod+Tab",
-  "Mod+Shift+Tab",
-  "Mod+Backquote",
-  "Mod+Shift+Backquote",
-  "Alt+Tab",
-  "Alt+Shift+Tab",
-  "Alt+F4",
-  "Ctrl+Alt+Delete",
-  "Ctrl+Insert",
-  "Shift+Insert",
-  "Shift+Delete",
-  "F11",
+  "Mod+L",
+  "Mod+D",
+  "Mod+R",
+  "Mod+F",
+  "Mod+G",
+  "Mod+P",
+  "Mod+S",
+  "Mod+0",
+  "Mod+Plus",
+  "Mod+Minus",
+  "Mod+Equal",
 ]);
 
 function navigatorPlatform(): string {
@@ -125,6 +116,30 @@ function isSupportedShortcutKey(key: string): boolean {
   return functionKey !== null;
 }
 
+const NUMPAD_CODES: Record<string, string> = {
+  NumpadAdd: "Plus",
+  NumpadSubtract: "Minus",
+  NumpadDecimal: "Period",
+  NumpadDivide: "Slash",
+};
+
+// Physical-key identity so Shift-modified glyphs (e.g. Shift+1 -> "!") still
+// resolve to their base key. event.code is layout-position stable.
+function keyForCode(code: string): string | null {
+  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(code);
+  if (digit) return digit[1];
+  const letter = /^Key([A-Z])$/.exec(code);
+  if (letter) return letter[1];
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (NAMED_KEYS.has(code)) return code;
+  return NUMPAD_CODES[code] ?? null;
+}
+
+function isReservedBinding(binding: string): boolean {
+  const normalised = normaliseBinding(binding);
+  return normalised !== null && RESERVED_BINDINGS.has(normalised);
+}
+
 export function normaliseBinding(binding: string): string | null {
   const rawParts = binding
     .split("+")
@@ -155,8 +170,13 @@ export function normaliseBinding(binding: string): string | null {
   return [...orderedModifiers, key].join("+");
 }
 
+type ShortcutKeyboardEvent = Pick<
+  KeyboardEvent,
+  "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"
+> & { code?: string };
+
 export function bindingFromKeyboardEvent(
-  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  event: ShortcutKeyboardEvent,
   platform: ShortcutPlatform,
 ): string | null {
   if (MODIFIER_KEYS.has(event.key)) return null;
@@ -166,13 +186,15 @@ export function bindingFromKeyboardEvent(
   if (event.ctrlKey && platform === "mac") parts.push("Ctrl");
   if (event.altKey) parts.push("Alt");
   if (event.shiftKey) parts.push("Shift");
-  parts.push(normaliseKey(event.key));
+  // Prefer physical-key identity so Shift-shifted glyphs still match.
+  const keyIdentity = (event.code ? keyForCode(event.code) : null) ?? normaliseKey(event.key);
+  parts.push(keyIdentity);
   return normaliseBinding(parts.join("+"));
 }
 
 export function bindingMatchesEvent(
   binding: string,
-  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  event: ShortcutKeyboardEvent,
   platform: ShortcutPlatform,
 ): boolean {
   const eventBinding = bindingFromKeyboardEvent(event, platform);
@@ -240,7 +262,6 @@ export function ShortcutProvider({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const commandsRef = useRef(commands);
   const bindingsRef = useRef(bindings);
-  const nativeSyncRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     commandsRef.current = commands;
@@ -298,17 +319,6 @@ export function ShortcutProvider({
   const openPalette = useCallback(() => setPaletteOpen(true), []);
 
   useEffect(() => {
-    if (!nativeApi.available) return;
-    const snapshot = Object.fromEntries(
-      NATIVE_MENU_COMMAND_IDS.map((id) => [id, getBinding(id)]),
-    );
-    nativeSyncRef.current = nativeSyncRef.current
-      .catch(() => undefined)
-      .then(() => nativeApi.syncMenuAccelerators(snapshot))
-      .catch(() => undefined);
-  }, [getBinding]);
-
-  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.isComposing || event.repeat) return;
       const paletteBinding = bindingsRef.current["app.commandPalette"] ?? COMMAND_PALETTE_BINDING;
@@ -320,7 +330,9 @@ export function ShortcutProvider({
 
       const command = commandsRef.current.find((candidate) => {
         const binding = bindingsRef.current[candidate.id] ?? candidate.defaultBinding;
-        return binding ? bindingMatchesEvent(binding, event, platform) : false;
+        // Never let a user rebinding or a shipped default hijack a browser combo.
+        if (!binding || isReservedBinding(binding)) return false;
+        return bindingMatchesEvent(binding, event, platform);
       });
       if (!command || command.enabled === false) return;
       if (isEditableTarget(event.target) && !command.allowInEditable) return;
@@ -330,23 +342,6 @@ export function ShortcutProvider({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [platform]);
-
-  useEffect(() => {
-    function onNativeCommand(event: Event) {
-      if (!(event instanceof CustomEvent)) return;
-      const detail = event.detail as { id?: unknown } | null;
-      if (typeof detail?.id !== "string") return;
-      if (detail.id === "app.commandPalette") {
-        setPaletteOpen(true);
-        return;
-      }
-      const command = commandsRef.current.find((candidate) => candidate.id === detail.id);
-      if (!command || command.enabled === false) return;
-      command.run();
-    }
-    window.addEventListener("litehouse:native-command", onNativeCommand);
-    return () => window.removeEventListener("litehouse:native-command", onNativeCommand);
-  }, []);
 
   const value = useMemo<ShortcutContextValue>(
     () => ({
@@ -383,16 +378,22 @@ export function ShortcutHint({ commandId }: { commandId: string }) {
   return <kbd className="shortcut-hint">{formatShortcut(binding, platform)}</kbd>;
 }
 
+const COMMAND_LIST_ID = "command-palette-list";
+const commandOptionId = (index: number) => `command-palette-option-${index}`;
+
 function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { commands, getBinding, platform } = useShortcuts();
   const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery("");
+    setActiveIndex(0);
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => {
       window.clearTimeout(timer);
@@ -411,6 +412,19 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
     );
   }, [commands, query]);
 
+  // Reset the highlight whenever the filtered set changes.
+  useEffect(() => setActiveIndex(0), [query]);
+
+  const activeIndexClamped = visibleCommands.length
+    ? Math.min(activeIndex, visibleCommands.length - 1)
+    : 0;
+
+  useEffect(() => {
+    if (!open) return;
+    const option = dialogRef.current?.querySelector<HTMLElement>(`#${commandOptionId(activeIndexClamped)}`);
+    option?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndexClamped, open, visibleCommands.length]);
+
   if (!open) return null;
 
   function runCommand(command: ShortcutCommand) {
@@ -419,18 +433,74 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
     command.run();
   }
 
+  function moveActive(delta: number) {
+    setActiveIndex((current) => {
+      const count = visibleCommands.length;
+      if (!count) return 0;
+      const base = Math.min(current, count - 1);
+      return (base + delta + count) % count;
+    });
+  }
+
+  // Only the search input is tab-reachable, which keeps focus inside the dialog.
+  function tabbableElements(): HTMLElement[] {
+    const dialog = dialogRef.current;
+    if (!dialog) return [];
+    return Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+  }
+
   function onDialogKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
+      return;
+    }
+    if (event.key === "Tab") {
+      const focusable = tabbableElements();
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === first || !dialogRef.current?.contains(active)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+      return;
+    }
+    // List navigation is driven from the search box (aria-activedescendant).
+    if (event.target !== inputRef.current) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveActive(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveActive(-1);
+    } else if (event.key === "Enter") {
+      const command = visibleCommands[activeIndexClamped];
+      if (command) {
+        event.preventDefault();
+        runCommand(command);
+      }
     }
   }
+
+  const activeDescendant = visibleCommands.length ? commandOptionId(activeIndexClamped) : undefined;
 
   return (
     <div className="palette-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <div
+        ref={dialogRef}
         className="command-palette"
         role="dialog"
         aria-modal="true"
@@ -449,22 +519,36 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
           <input
             ref={inputRef}
             type="search"
+            role="combobox"
+            aria-expanded
+            aria-controls={COMMAND_LIST_ID}
+            aria-activedescendant={activeDescendant}
+            aria-autocomplete="list"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search commands…"
             autoComplete="off"
           />
         </label>
-        <ul className="command-list">
-          {visibleCommands.map((command) => {
+        <ul className="command-list" id={COMMAND_LIST_ID} role="listbox" aria-label="Commands">
+          {visibleCommands.map((command, index) => {
             const binding = getBinding(command.id);
+            const isActive = index === activeIndexClamped;
             return (
-              <li key={command.id}>
+              <li
+                key={command.id}
+                id={commandOptionId(index)}
+                role="option"
+                aria-selected={isActive}
+                className={isActive ? "is-active" : undefined}
+              >
                 <button
                   type="button"
+                  tabIndex={-1}
                   disabled={command.enabled === false}
                   title={command.enabled === false ? command.disabledReason : command.description}
                   onClick={() => runCommand(command)}
+                  onMouseMove={() => setActiveIndex(index)}
                 >
                   <span>
                     <b>{command.label}</b>
