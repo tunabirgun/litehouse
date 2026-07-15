@@ -222,7 +222,6 @@ html[data-theme="dark"] .brand-ink {
 }
 
 .masthead-tools,
-.language-switch,
 .local-mark {
   display: flex;
   align-items: center;
@@ -323,25 +322,6 @@ html[data-theme="dark"] .brand-ink {
 .lh-mobile-notice-close:hover {
   color: var(--ink);
   background: color-mix(in srgb, var(--ink) 8%, transparent);
-}
-
-.language-switch {
-  gap: 7px;
-}
-
-.language-switch button {
-  min-width: 36px;
-  padding: 6px;
-  border: 0;
-  color: var(--ink-soft);
-  background: transparent;
-}
-
-.language-switch button[aria-pressed="true"] {
-  color: var(--ink);
-  font-weight: 650;
-  text-decoration: underline;
-  text-underline-offset: 5px;
 }
 
 .shell-body {
@@ -3052,9 +3032,6 @@ html[data-motion="full"] .masthead::before {
     gap: 10px;
   }
 
-  .language-switch > svg {
-    display: none;
-  }
 
   .command-trigger > span,
   .command-trigger kbd,

@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
-export type Locale = "en" | "tr";
+export type Locale = "en";
 
 const messages = {
   en: {
@@ -8,9 +8,6 @@ const messages = {
     "app.demo": "Browser-local alpha",
     "app.local": "Local app",
     "app.browserLocal": "browser-local",
-    "app.language": "Language",
-    "app.english": "English",
-    "app.turkish": "Türkçe",
     "nav.primary": "Primary navigation",
     "nav.today": "Today",
     "nav.library": "Library",
@@ -161,7 +158,6 @@ const messages = {
     "appearance.fullHelp": "Gentle page and control transitions; operating-system reduced-motion settings still take precedence.",
     "appearance.reducedHelp": "Opacity changes only, with shorter timing.",
     "appearance.offHelp": "No decorative animation or smooth scrolling.",
-    "appearance.language": "Interface language",
     "appearance.preview": "Reading preview",
     "appearance.previewTitle": "Evidence should remain calm enough to examine.",
     "appearance.previewText": "Typography carries the hierarchy; color never carries scientific status by itself.",
@@ -213,20 +209,12 @@ const I18nContext = createContext<I18nValue | null>(null);
 // App is English-only; setLocale is a no-op kept for API compatibility.
 const setLocale: I18nValue["setLocale"] = () => {};
 
-function storedLocale(): Locale {
-  // Guard storage access; private-mode browsers can throw on read.
-  try {
-    return window.localStorage.getItem("litehouse.locale") === "tr" ? "tr" : "en";
-  } catch {
-    return "en";
-  }
-}
-
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale] = useState<Locale>(storedLocale);
+  const [locale] = useState<Locale>("en");
 
   useEffect(() => {
     try {
+      // Overwrite any stale locale left by earlier builds; the app is English-only.
       window.localStorage.setItem("litehouse.locale", "en");
     } catch {
       // Some privacy modes block storage writes; language is fixed to English regardless.
