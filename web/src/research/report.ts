@@ -181,19 +181,50 @@ function boundaryReceiptMarkdown(audit: RetrievalBoundaryAudit | undefined): str
   ].join("\n");
 }
 
-// Cap the evidence sent to the model so the prompt fits a browser model's context window.
+// Comprehensiveness tiers. Each is sized so the evidence prompt plus the model's reasoning
+// and synthesis fit inside its context window: deeper tiers read more sources, keep longer
+// abstracts, write more tokens, and need a wider context window (and so more memory and time).
 // The top-ranked sources keep [S1..] aligned with the reference list, which still lists all.
-const SYNTHESIS_EVIDENCE_LIMIT = 15;
-const SYNTHESIS_ABSTRACT_CHARS = 600;
+export type SynthesisDepth = "brief" | "standard" | "deep";
 
-export function synthesisPrompt(query: string, records: LiteratureRecord[]): string {
-  const evidence = records.slice(0, SYNTHESIS_EVIDENCE_LIMIT).map((record, index) => ({
+export interface SynthesisBudget {
+  perSourceLimit: number;
+  evidenceLimit: number;
+  abstractChars: number;
+  maxTokens: number;
+  contextWindow: number;
+}
+
+export const SYNTHESIS_BUDGETS: Record<SynthesisDepth, SynthesisBudget> = {
+  brief: { perSourceLimit: 8, evidenceLimit: 8, abstractChars: 500, maxTokens: 2_560, contextWindow: 8_192 },
+  standard: { perSourceLimit: 15, evidenceLimit: 15, abstractChars: 600, maxTokens: 3_584, contextWindow: 8_192 },
+  deep: { perSourceLimit: 30, evidenceLimit: 26, abstractChars: 800, maxTokens: 7_168, contextWindow: 16_384 },
+};
+
+const SYNTHESIS_GUIDANCE: Record<SynthesisDepth, readonly string[]> = {
+  brief: [
+    "Keep the synthesis concise: two to three tight paragraphs covering only the most salient convergent findings and the single most important disagreement.",
+    "Do not add a heading, a title, or a reference list.",
+  ],
+  standard: [
+    "Write a thorough synthesis of several paragraphs covering convergent findings, disagreements, and limitations across the sources.",
+    "Do not add a heading, a title, or a reference list.",
+  ],
+  deep: [
+    "Write a comprehensive synthesis. Give distinct themes, methods, convergent and conflicting findings, and limitations their own paragraphs, and discuss as many of the cited sources as the evidence supports. Favour depth and completeness over brevity.",
+    "You may organise the synthesis under short thematic subheadings (### ...). Do not add a document title or a reference list.",
+  ],
+};
+
+export function synthesisPrompt(query: string, records: LiteratureRecord[], depth: SynthesisDepth = "standard"): string {
+  const budget = SYNTHESIS_BUDGETS[depth];
+  const evidence = records.slice(0, budget.evidenceLimit).map((record, index) => ({
     id: sourceId(index),
     title: record.title,
     authors: record.contributors.slice(0, 8),
     date: record.publicationDate ?? null,
     venue: record.venue ?? null,
-    abstract: record.abstract ? record.abstract.slice(0, SYNTHESIS_ABSTRACT_CHARS) : null,
+    abstract: record.abstract ? record.abstract.slice(0, budget.abstractChars) : null,
     evidence_level: record.openFullTextUrl ? "open_full_text_link_identified" : record.abstract ? "abstract" : "metadata_only",
     doi: record.doi ?? null,
   }));
@@ -203,7 +234,7 @@ export function synthesisPrompt(query: string, records: LiteratureRecord[]): str
     "Every factual sentence ends with one or more citations like [S1] or [S1, S2].",
     "Never infer a result from a title or metadata alone. If an abstract is absent, note only bibliographic relevance.",
     "Do not introduce URLs, DOIs, authors, dates, or statistics absent from the JSON.",
-    "Cover convergent findings, disagreements, and limitations across the sources. Do not add a heading, a title, or a reference list.",
+    ...SYNTHESIS_GUIDANCE[depth],
     `Research query: ${query}`,
     `Evidence JSON: ${JSON.stringify(evidence)}`,
   ].join("\n\n");

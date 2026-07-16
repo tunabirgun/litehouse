@@ -185,6 +185,11 @@ export function classifyBrowserModelError(error: unknown): BrowserModelError {
   };
 }
 
+// Proven base context window: a multi-source evidence prompt plus its synthesis fits here,
+// and every tier's KV cache at this size stays within its declared minimum device memory.
+// Deeper reports widen it on demand (ensureContextWindow), which costs memory and time.
+const BASE_CONTEXT_WINDOW = 8_192;
+
 export class BrowserModelRuntime {
   private state: BrowserModelState = {
     phase: "detecting",
@@ -207,6 +212,8 @@ export class BrowserModelRuntime {
   private worker: WorkerLike | null = null;
   private engine: EngineLike | null = null;
   private cancelLoad: (() => void) | null = null;
+  // Context window the loaded engine was last reloaded with; 0 when no engine is live.
+  private loadedContextWindow = 0;
 
   constructor(private readonly dependencies: BrowserModelRuntimeDependencies = defaultDependencies()) {}
 
@@ -359,11 +366,12 @@ export class BrowserModelRuntime {
       const result = await Promise.race([
         // Widen the context window so a multi-source evidence prompt plus its synthesis
         // fits; the default 4096 truncates real literature requests. Qwen3 supports 32k.
-        engine.reload(model.id, { context_window_size: 8192 }).then(() => "ready" as const),
+        engine.reload(model.id, { context_window_size: BASE_CONTEXT_WINDOW }).then(() => "ready" as const),
         cancelled,
       ]);
       this.cancelLoad = null;
       if (result === "cancelled" || operation !== this.operation) return;
+      this.loadedContextWindow = BASE_CONTEXT_WINDOW;
       this.update({
         phase: "ready",
         progress: 1,
@@ -376,6 +384,7 @@ export class BrowserModelRuntime {
       this.worker?.terminate();
       this.worker = null;
       this.engine = null;
+      this.loadedContextWindow = 0;
       this.cancelLoad = null;
       this.update({
         phase: "error",
@@ -395,6 +404,7 @@ export class BrowserModelRuntime {
     this.worker?.terminate();
     this.worker = null;
     this.engine = null;
+    this.loadedContextWindow = 0;
     queueMicrotask(() => {
       this.update({
         phase: "cancelled",
@@ -419,6 +429,7 @@ export class BrowserModelRuntime {
       this.worker?.terminate();
       this.worker = null;
       this.engine = null;
+      this.loadedContextWindow = 0;
       const module = await this.webLlm();
       await module.deleteModelAllInfoInCache(modelId, this.appConfig as AppConfig);
       this.update({
@@ -438,6 +449,34 @@ export class BrowserModelRuntime {
         },
       });
     }
+  }
+
+  /**
+   * Ensure the loaded engine can hold at least `target` context tokens, reloading it with a
+   * wider window when a comprehensive report needs one. Returns the context window actually
+   * available so the caller can size its prompt to fit and never overflow. A no-op (and a
+   * safe return of the current window) when no model is ready or the window already suffices.
+   */
+  async ensureContextWindow(target: number): Promise<number> {
+    if (this.state.phase !== "ready" || !this.engine) return this.loadedContextWindow;
+    if (this.loadedContextWindow >= target) return this.loadedContextWindow;
+    const modelId = this.state.selectedModelId;
+    const engine = this.engine;
+    this.update({ phase: "loading", progressText: "Preparing a wider context window for a comprehensive report…" });
+    try {
+      await engine.reload(modelId, { context_window_size: target });
+      this.loadedContextWindow = target;
+    } catch {
+      // The widen failed and may have left the engine unusable; rebuild at the known-good base.
+      try {
+        await engine.reload(modelId, { context_window_size: BASE_CONTEXT_WINDOW });
+        this.loadedContextWindow = BASE_CONTEXT_WINDOW;
+      } catch {
+        this.loadedContextWindow = 0;
+      }
+    }
+    this.update({ phase: "ready", progressText: "Model ready in this browser" });
+    return this.loadedContextWindow;
   }
 
   async completeChat(

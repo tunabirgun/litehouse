@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { saveBrowserReport } from "./browser/vault";
-import { createGroundedReport, synthesisPrompt, type GroundedReport } from "./research/report";
+import { createGroundedReport, synthesisPrompt, SYNTHESIS_BUDGETS, type GroundedReport, type SynthesisDepth } from "./research/report";
 import { reportToLatex } from "./research/latex";
 import { digestCanonical } from "./research/integrity";
 import { searchLiterature } from "./research/sources";
@@ -207,10 +207,14 @@ const copy = {
   synthesisAiHelp: "A local model reads the top-ranked sources and writes a cited, prose synthesis. Needs a downloaded model (Settings → Local AI) and takes longer.",
   synthesisEvidence: "Evidence overview",
   synthesisEvidenceHelp: "No model needed. Lists each accepted source with its access state and a short abstract excerpt. Fast, and works on any device.",
-  depth: "Report depth",
+  depth: "Comprehensiveness",
   brief: "Brief digest",
   standard: "Standard review",
   deep: "Deep review",
+  briefHelp: "Two or three paragraphs on the strongest convergent findings. Fastest.",
+  standardHelp: "Several paragraphs across findings, disagreements, and limitations. Balanced default.",
+  deepHelp: "Comprehensive, multi-theme synthesis over more sources. Slowest, uses more memory.",
+  depthWarning: "More comprehensive reports read more sources and write a longer synthesis, so on-device generation runs noticeably longer. Deep also widens the model's context window and uses more memory.",
   recommendations: "Include bounded reading recommendations",
   recommendationsHelp: "Recommendations cite their evidence and explain why the work may merit closer reading.",
   citation: "Reference style",
@@ -438,19 +442,19 @@ export async function executeGuidedRequest(
       .map((value) => value.trim())
       .filter(Boolean)
       .slice(0, 30),
-    perSourceLimit: draft.depth === "brief" ? 8 : draft.depth === "deep" ? 25 : 15,
+    perSourceLimit: SYNTHESIS_BUDGETS[draft.depth].perSourceLimit,
   });
   let llmSynthesis: string | undefined;
   let synthesisFailure: string | undefined;
-  // Reasoning models spend tokens on a hidden <think> block, so the budget must leave room
-  // for both the reasoning and the synthesis within the 8192-token context window.
-  const maxTokens = draft.depth === "brief" ? 2_560 : draft.depth === "deep" ? 4_096 : 3_584;
-  const messages = [
-    { role: "system" as const, content: "You are an evidence-bound literature review assistant. Never use unstated knowledge and obey the source-citation contract exactly." },
-    { role: "user" as const, content: synthesisPrompt(draft.topic.trim(), retrieval.records) },
+  const systemPrompt = "You are an evidence-bound literature review assistant. Never use unstated knowledge and obey the source-citation contract exactly.";
+  const buildMessages = (depth: SynthesisDepth) => [
+    { role: "system" as const, content: systemPrompt },
+    { role: "user" as const, content: synthesisPrompt(draft.topic.trim(), retrieval.records, depth) },
   ];
   // Only reach for a model when the user chose AI synthesis; "evidence" mode stays a
-  // deterministic listing regardless of whether a model is loaded.
+  // deterministic listing regardless of whether a model is loaded. Reasoning models spend
+  // tokens on a hidden <think> block, so each depth's maxTokens leaves room for reasoning
+  // plus the synthesis inside its context window.
   const remote = draft.synthesisMode === "ai" ? getSessionRemoteProvider() : null;
   if (remote) {
     onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the connected model…" });
@@ -458,24 +462,30 @@ export async function executeGuidedRequest(
       const generated = await generateWithRemoteProvider({
         config: remote.config,
         apiKey: remote.apiKey,
-        messages,
-        maxOutputTokens: maxTokens,
+        messages: buildMessages(draft.depth),
+        maxOutputTokens: SYNTHESIS_BUDGETS[draft.depth].maxTokens,
       });
       llmSynthesis = generated.text;
     } catch (error) {
       synthesisFailure = error instanceof RemoteProviderError ? error.code : "unknown";
     }
   } else if (draft.synthesisMode === "ai" && browserModelRuntime.getSnapshot().phase === "ready") {
+    // A deeper report needs a wider context window; widen it first (slower, more memory) and
+    // drop to the standard budget if the widen did not take, so the prompt never overflows.
+    const requested = SYNTHESIS_BUDGETS[draft.depth];
+    const availableContext = await browserModelRuntime.ensureContextWindow(requested.contextWindow);
+    const depth: SynthesisDepth = availableContext >= requested.contextWindow ? draft.depth : "standard";
+    const budget = SYNTHESIS_BUDGETS[depth];
     const startedAt = Date.now();
     onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the on-device model…" });
     try {
-      llmSynthesis = await browserModelRuntime.completeChat(messages, {
-        maxTokens,
+      llmSynthesis = await browserModelRuntime.completeChat(buildMessages(depth), {
+        maxTokens: budget.maxTokens,
         temperature: 0,
         onToken: (tokens) => {
           const elapsed = (Date.now() - startedAt) / 1000;
           const rate = tokens / Math.max(elapsed, 0.1);
-          const etaSeconds = tokens > 6 && rate > 0.3 ? Math.round(Math.max(0, maxTokens - tokens) / rate) : undefined;
+          const etaSeconds = tokens > 6 && rate > 0.3 ? Math.round(Math.max(0, budget.maxTokens - tokens) / rate) : undefined;
           onProgress?.({ phase: "synthesis", label: `Writing the synthesis · ${tokens} tokens`, etaSeconds });
         },
       });
@@ -867,8 +877,9 @@ function OutputStep({ c, draft, update }: { c: Copy; draft: WizardData; update: 
       <fieldset className="lh-fieldset">
         <legend>{c.depth}</legend>
         <div className="lh-card-choices three-column">
-          {(["brief", "standard", "deep"] as const).map((value) => <OptionCard key={value} checked={draft.depth === value} name="depth" value={value} label={c[value]} onChange={() => update("depth", value)} />)}
+          {([["brief", c.briefHelp], ["standard", c.standardHelp], ["deep", c.deepHelp]] as const).map(([value, help]) => <OptionCard key={value} checked={draft.depth === value} name="depth" value={value} label={c[value]} help={help} onChange={() => update("depth", value)} />)}
         </div>
+        <p className="lh-field-help">{c.depthWarning}</p>
       </fieldset>
       <label className="lh-checkbox lh-feature-check"><input type="checkbox" checked={draft.recommendations} onChange={(event) => update("recommendations", event.target.checked)} /><span><b>{c.recommendations}</b><small>{c.recommendationsHelp}</small></span></label>
       <label className="lh-field lh-select-field"><span>{c.citation}</span><select value={draft.citation} onChange={(event) => update("citation", event.target.value)}><option value="apa-7">APA 7</option><option value="ieee">IEEE</option><option value="chicago-author-date">Chicago author–date</option><option value="mla-9">MLA 9</option><option value="vancouver">Vancouver</option><option value="harvard-cite-them-right">Harvard</option></select></label>
