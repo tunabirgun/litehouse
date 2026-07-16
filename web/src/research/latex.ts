@@ -159,7 +159,9 @@ function titleBlock(title: string, date: string, sha: string): string {
 
 export function reportToLatex(report: GroundedReport): string {
   const date = report.createdAt.slice(0, 10);
-  const start = report.markdown.indexOf("## Synthesis");
+  // Start the body at the first section heading (Synthesis or Evidence overview), skipping
+  // the H1 title and the intro blurb, which the title block already covers.
+  const start = report.markdown.search(/^## /mu);
   const body = start >= 0 ? report.markdown.slice(start) : report.markdown;
   const preamble = needsUnicodeEngine(report.query + report.markdown) ? PREAMBLE_XELATEX : PREAMBLE_PDFLATEX;
   return `${preamble}\\begin{document}\n${titleBlock(report.query, date, report.retrievalSha256)}${blocksToLatex(body)}\n\\end{document}\n`;

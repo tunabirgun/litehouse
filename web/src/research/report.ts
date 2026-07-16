@@ -119,7 +119,7 @@ function deterministicSynthesis(records: LiteratureRecord[], query: string): str
     return "No works passed the selected sources and retrieval boundaries, so no synthesis was produced. Widen the publication window, add sources, or allow paywalled metadata and abstracts, then run the search again.";
   }
   const shown = records.slice(0, 12);
-  const lead = `Litehouse retrieved and accepted ${records.length} work${records.length === 1 ? "" : "s"} for “${query.trim()}”, ordered by topical relevance, cross-source corroboration, and citation signal. Each entry is described only from its own bibliographic metadata and abstract — a title is never treated as a result.`;
+  const lead = `Without a connected model, Litehouse lists the retrieved evidence rather than writing a synthesis. It accepted ${records.length} work${records.length === 1 ? "" : "s"} for “${query.trim()}”, ordered by topical relevance, cross-source corroboration, and citation signal; each is described only from its own bibliographic metadata and abstract. Connect a local model or API provider in Settings for an AI-written synthesis of these sources.`;
   const entries = shown.map((record, index) => {
     const authors = record.contributors.length ? apaAuthors(record.contributors) : "Unknown author";
     const year = record.publicationDate?.slice(0, 4) ?? "n.d.";
@@ -267,7 +267,7 @@ export async function createGroundedReport(input: {
     "",
     "*An evidence-locked literature overview, generated locally in your browser. Sources are retrieved directly from open scholarly APIs; nothing is sent to a Litehouse server.*",
     "",
-    "## Synthesis",
+    `## ${validated?.valid ? "Synthesis" : "Evidence overview"}`,
     "",
     synthesis,
     "",
