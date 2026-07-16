@@ -1,5 +1,3 @@
-# Litehouse
-
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brand/png/litehouse-wordmark-dark.png">
