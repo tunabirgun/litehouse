@@ -1,5 +1,5 @@
 import { Check, Download, ExternalLink, Printer, ShieldAlert, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
@@ -33,6 +33,23 @@ function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "");
 }
 
+// Turn bare http(s) URLs in a text run into clickable links (references carry DOI URLs).
+// The http(s) test keeps javascript:/data: out even if a stored record was tampered with.
+function linkify(text: string): ReactNode[] {
+  return text.split(/(https?:\/\/[^\s<>()]+)/gu).map((part, index) => {
+    if (/^https?:\/\//iu.test(part)) {
+      const clean = part.replace(/[.,;:]+$/u, "");
+      const trailing = part.slice(clean.length);
+      return (
+        <Fragment key={index}>
+          <a href={clean} target="_blank" rel="noopener noreferrer nofollow">{clean}</a>{trailing}
+        </Fragment>
+      );
+    }
+    return part ? <Fragment key={index}>{part}</Fragment> : null;
+  });
+}
+
 // Render the report's limited inline Markdown (**strong**, *em*, `code`) honouring the
 // backslash escapes escapeMarkdown() adds, so no raw \_ \< or ** leaks onto the page.
 function Inline({ text }: { text: string }) {
@@ -42,7 +59,7 @@ function Inline({ text }: { text: string }) {
         if (token.type === "strong") return <strong key={index}>{token.value}</strong>;
         if (token.type === "em") return <em key={index}>{token.value}</em>;
         if (token.type === "code") return <code key={index}>{token.value}</code>;
-        return <Fragment key={index}>{token.value}</Fragment>;
+        return <Fragment key={index}>{linkify(token.value)}</Fragment>;
       })}
     </>
   );
@@ -137,7 +154,7 @@ export function BrowserReportPage() {
         </dl>
         {!evidenceVerified && (
           <p className="receipt-mismatch" role="alert">
-            The evidence bundle no longer matches its retrieval SHA-256. Source links are shown as unverified plain text and were not opened as trusted links.
+            The evidence bundle no longer matches its retrieval SHA-256, so the stored records may have changed since this report was saved. The source links below are marked unverified — open them with that in mind.
           </p>
         )}
       </details>
@@ -156,9 +173,11 @@ export function BrowserReportPage() {
               return (
                 <li key={record.id}>
                   <span><b>S{index + 1}</b> {record.title}</span>
-                  {url && (evidenceVerified
-                    ? <a href={url} target="_blank" rel="noopener noreferrer">Open source <ExternalLink aria-hidden="true" size={14} /></a>
-                    : <span className="source-url-untrusted">{url}</span>)}
+                  {url && /^https?:\/\//iu.test(url) && (
+                    <a href={url} target="_blank" rel="noopener noreferrer nofollow" className={evidenceVerified ? undefined : "source-link-unverified"}>
+                      {evidenceVerified ? "Open source" : "Open source · unverified"} <ExternalLink aria-hidden="true" size={14} />
+                    </a>
+                  )}
                 </li>
               );
             })}

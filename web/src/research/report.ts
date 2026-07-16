@@ -94,6 +94,26 @@ function accessTag(record: LiteratureRecord): string {
   return "metadata only";
 }
 
+// Trim a source abstract to a clean excerpt: keep as many whole sentences as fit so the
+// text ends on a full stop, not a mid-sentence ellipsis. Falls back to a word boundary
+// (never mid-word) only when the first sentence alone is longer than the budget.
+function excerpt(text: string, max = 320): string {
+  const clean = text.replace(/\s+/gu, " ").trim();
+  if (clean.length <= max) return clean;
+  const sentences = clean.match(/[^.!?]+[.!?]+(?=\s|$)/gu);
+  if (sentences && sentences[0].trim().length <= max) {
+    let out = "";
+    for (const sentence of sentences) {
+      const next = `${out} ${sentence}`.trim();
+      if (out && next.length > max) break;
+      out = next;
+    }
+    if (out.length >= 60) return out;
+  }
+  const wordEnd = clean.slice(0, max).lastIndexOf(" ");
+  return `${clean.slice(0, wordEnd > 0 ? wordEnd : max).trim()}…`;
+}
+
 function deterministicSynthesis(records: LiteratureRecord[], query: string): string {
   if (!records.length) {
     return "No works passed the selected sources and retrieval boundaries, so no synthesis was produced. Widen the publication window, add sources, or allow paywalled metadata and abstracts, then run the search again.";
@@ -105,7 +125,7 @@ function deterministicSynthesis(records: LiteratureRecord[], query: string): str
     const year = record.publicationDate?.slice(0, 4) ?? "n.d.";
     const venue = record.venue ? `, *${escapeMarkdown(record.venue)}*` : "";
     const abstract = record.abstract
-      ? ` ${escapeMarkdown(record.abstract.slice(0, 340))}${record.abstract.length > 340 ? "…" : ""}`
+      ? ` ${escapeMarkdown(excerpt(record.abstract))}`
       : " No abstract was available from the source metadata.";
     return `- **${escapeMarkdown(record.title.replace(/\s*\.\s*$/u, ""))}** — ${escapeMarkdown(authors)} (${year})${venue}; ${accessTag(record)}.${abstract} [${sourceId(index)}]`;
   }).join("\n");

@@ -113,6 +113,11 @@
   white-space: nowrap;
 }
 
+.browser-report-sources a.source-link-unverified {
+  color: var(--ink-soft);
+  text-decoration-style: dotted;
+}
+
 @media (max-width: 640px) {
   .browser-report-sources li {
     grid-template-columns: 1fr;
