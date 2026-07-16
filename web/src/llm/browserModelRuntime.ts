@@ -74,7 +74,7 @@ interface StreamChunk {
 }
 
 interface EngineLike {
-  reload(modelId: string): Promise<void>;
+  reload(modelId: string, chatOpts?: { context_window_size?: number }): Promise<void>;
   unload(): Promise<void>;
   interruptGenerate(): void;
   chat: {
@@ -357,7 +357,9 @@ export class BrowserModelRuntime {
         this.cancelLoad = () => resolve("cancelled");
       });
       const result = await Promise.race([
-        engine.reload(model.id).then(() => "ready" as const),
+        // Widen the context window so a multi-source evidence prompt plus its synthesis
+        // fits; the default 4096 truncates real literature requests. Qwen3 supports 32k.
+        engine.reload(model.id, { context_window_size: 8192 }).then(() => "ready" as const),
         cancelled,
       ]);
       this.cancelLoad = null;

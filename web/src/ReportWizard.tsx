@@ -44,6 +44,7 @@ export interface WizardData {
   sources: string[];
   ranking: string[];
   depth: "brief" | "standard" | "deep";
+  synthesisMode: "ai" | "evidence";
   recommendations: boolean;
   citation: string;
 }
@@ -113,6 +114,7 @@ export function createDefaultDraft(): WizardData {
     sources: preferredSources.length ? preferredSources : ["openalex", "crossref", "datacite"],
     ranking: ["recent-attention", "normalized-influence"],
     depth: "standard",
+    synthesisMode: "ai",
     recommendations: true,
     citation: preferences.citation?.trim() || "apa-7",
   };
@@ -133,6 +135,7 @@ function readDraft(): WizardData {
       expertise: Array.isArray(parsed.expertise) ? parsed.expertise : defaults.expertise,
       sources: Array.isArray(parsed.sources) ? parsed.sources : defaults.sources,
       ranking: Array.isArray(parsed.ranking) ? parsed.ranking : defaults.ranking,
+      synthesisMode: parsed.synthesisMode === "evidence" ? "evidence" : "ai",
     };
   } catch {
     return defaults;
@@ -199,6 +202,11 @@ const copy = {
   rankingHelp: "Ranking changes reading order, not scientific truth. Every signal stays visible and separate from evidence strength.",
   rankingTruth: "No citation, venue, or attention signal is treated as proof that a claim is true.",
   outputTitle: "Shape the report",
+  synthesisTitle: "Synthesis mode",
+  synthesisAi: "AI synthesis",
+  synthesisAiHelp: "A local model reads the top-ranked sources and writes a cited, prose synthesis. Needs a downloaded model (Settings → Local AI) and takes longer.",
+  synthesisEvidence: "Evidence overview",
+  synthesisEvidenceHelp: "No model needed. Lists each accepted source with its access state and a short abstract excerpt. Fast, and works on any device.",
   depth: "Report depth",
   brief: "Brief digest",
   standard: "Standard review",
@@ -434,12 +442,16 @@ export async function executeGuidedRequest(
   });
   let llmSynthesis: string | undefined;
   let synthesisFailure: string | undefined;
-  const maxTokens = draft.depth === "brief" ? 1_200 : draft.depth === "deep" ? 4_096 : 2_400;
+  // Reasoning models spend tokens on a hidden <think> block, so the budget must leave room
+  // for both the reasoning and the synthesis within the 8192-token context window.
+  const maxTokens = draft.depth === "brief" ? 2_560 : draft.depth === "deep" ? 4_096 : 3_584;
   const messages = [
     { role: "system" as const, content: "You are an evidence-bound literature review assistant. Never use unstated knowledge and obey the source-citation contract exactly." },
     { role: "user" as const, content: synthesisPrompt(draft.topic.trim(), retrieval.records) },
   ];
-  const remote = getSessionRemoteProvider();
+  // Only reach for a model when the user chose AI synthesis; "evidence" mode stays a
+  // deterministic listing regardless of whether a model is loaded.
+  const remote = draft.synthesisMode === "ai" ? getSessionRemoteProvider() : null;
   if (remote) {
     onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the connected model…" });
     try {
@@ -453,7 +465,7 @@ export async function executeGuidedRequest(
     } catch (error) {
       synthesisFailure = error instanceof RemoteProviderError ? error.code : "unknown";
     }
-  } else if (browserModelRuntime.getSnapshot().phase === "ready") {
+  } else if (draft.synthesisMode === "ai" && browserModelRuntime.getSnapshot().phase === "ready") {
     const startedAt = Date.now();
     onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the on-device model…" });
     try {
@@ -845,6 +857,13 @@ function EvidenceStep({ c, draft, update }: { c: Copy; draft: WizardData; update
 function OutputStep({ c, draft, update }: { c: Copy; draft: WizardData; update: Update }) {
   return (
     <WizardSection title={c.outputTitle} index="05">
+      <fieldset className="lh-fieldset">
+        <legend>{c.synthesisTitle}</legend>
+        <div className="lh-card-choices two-column">
+          <OptionCard checked={draft.synthesisMode === "ai"} name="synthesisMode" value="ai" label={c.synthesisAi} help={c.synthesisAiHelp} onChange={() => update("synthesisMode", "ai")} />
+          <OptionCard checked={draft.synthesisMode === "evidence"} name="synthesisMode" value="evidence" label={c.synthesisEvidence} help={c.synthesisEvidenceHelp} onChange={() => update("synthesisMode", "evidence")} />
+        </div>
+      </fieldset>
       <fieldset className="lh-fieldset">
         <legend>{c.depth}</legend>
         <div className="lh-card-choices three-column">

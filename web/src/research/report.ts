@@ -41,6 +41,17 @@ function escapeMarkdown(value: string): string {
   return value.replace(/([\\`*_[\]<>])/gu, "\\$1");
 }
 
+// Reasoning models (Qwen3) emit a <think>…</think> block before the answer. Remove it so
+// only the synthesis is validated and shown, and drop a stray unmatched tag if the opening
+// or closing was cut off by the token limit.
+function stripThinking(value: string): string {
+  return value
+    .replace(/<think>[\s\S]*?<\/think>/giu, "")
+    .replace(/^[\s\S]*?<\/think>/iu, "")
+    .replace(/<\/?think>/giu, "")
+    .trim();
+}
+
 // Best-effort APA name formatting from heterogeneous scholarly metadata.
 // Detects the input shape rather than blindly inverting:
 //   "Congting Guo"        -> "Guo, C."      (given surname)
@@ -170,23 +181,29 @@ function boundaryReceiptMarkdown(audit: RetrievalBoundaryAudit | undefined): str
   ].join("\n");
 }
 
+// Cap the evidence sent to the model so the prompt fits a browser model's context window.
+// The top-ranked sources keep [S1..] aligned with the reference list, which still lists all.
+const SYNTHESIS_EVIDENCE_LIMIT = 15;
+const SYNTHESIS_ABSTRACT_CHARS = 600;
+
 export function synthesisPrompt(query: string, records: LiteratureRecord[]): string {
-  const evidence = records.map((record, index) => ({
+  const evidence = records.slice(0, SYNTHESIS_EVIDENCE_LIMIT).map((record, index) => ({
     id: sourceId(index),
     title: record.title,
-    authors: record.contributors,
+    authors: record.contributors.slice(0, 8),
     date: record.publicationDate ?? null,
     venue: record.venue ?? null,
-    abstract: record.abstract ?? null,
+    abstract: record.abstract ? record.abstract.slice(0, SYNTHESIS_ABSTRACT_CHARS) : null,
     evidence_level: record.openFullTextUrl ? "open_full_text_link_identified" : record.abstract ? "abstract" : "metadata_only",
     doi: record.doi ?? null,
   }));
   return [
-    "Write a concise literature-update synthesis using only the evidence JSON below.",
-    "Every factual sentence must end with one or more citations like [S1] or [S1, S2].",
-    "Never infer a study result from its title or metadata. If an abstract is absent, discuss only bibliographic relevance.",
-    "Do not introduce URLs, DOIs, authors, dates, statistics, or claims absent from the JSON.",
-    "Separate convergent findings, disagreements, limitations, and recommended further reading.",
+    "Write a literature-review synthesis in flowing prose paragraphs, using only the evidence JSON below.",
+    "Do not restate source titles or list source ids on their own line; weave the findings into sentences.",
+    "Every factual sentence ends with one or more citations like [S1] or [S1, S2].",
+    "Never infer a result from a title or metadata alone. If an abstract is absent, note only bibliographic relevance.",
+    "Do not introduce URLs, DOIs, authors, dates, or statistics absent from the JSON.",
+    "Cover convergent findings, disagreements, and limitations across the sources. Do not add a heading, a title, or a reference list.",
     `Research query: ${query}`,
     `Evidence JSON: ${JSON.stringify(evidence)}`,
   ].join("\n\n");
@@ -199,19 +216,24 @@ export function validateGroundedSynthesis(text: string, records: LiteratureRecor
   const unknownCitations = [...new Set(cited.filter((citation) => !allowed.has(citation)))];
 
   const uncitedParagraphs: number[] = [];
+  let contentParagraphs = 0;
   text.split(/\n\s*\n/gu).forEach((paragraph, index) => {
     const normalized = paragraph.trim();
     if (!normalized || /^#{1,6}\s/u.test(normalized)) return;
+    contentParagraphs += 1;
     if (!citationPattern.test(normalized)) uncitedParagraphs.push(index + 1);
     citationPattern.lastIndex = 0;
   });
+  // A concluding or framing paragraph may summarize already-cited claims without its own
+  // citation; allow a small minority rather than rejecting an otherwise-grounded synthesis.
+  const uncitedAllowed = Math.max(1, Math.floor(contentParagraphs / 4));
 
   const allowedDois = new Set(records.map(({ doi }) => doi?.toLowerCase()).filter(Boolean));
   const foundDois = [...text.matchAll(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/giu)].map((match) => match[0].replace(/[.,;)]$/u, "").toLowerCase());
   const unrecognizedDois = [...new Set(foundDois.filter((candidate) => !allowedDois.has(candidate)))];
 
   return {
-    valid: cited.length > 0 && unknownCitations.length === 0 && uncitedParagraphs.length === 0 && unrecognizedDois.length === 0,
+    valid: cited.length > 0 && unknownCitations.length === 0 && uncitedParagraphs.length <= uncitedAllowed && unrecognizedDois.length === 0,
     unknownCitations,
     uncitedParagraphs,
     unrecognizedDois,
@@ -225,10 +247,11 @@ export async function createGroundedReport(input: {
   synthesisFailure?: string;
 }): Promise<GroundedReport> {
   const createdAt = new Date().toISOString();
-  const validated = input.llmSynthesis
-    ? validateGroundedSynthesis(input.llmSynthesis, input.retrieval.records)
+  const cleanedSynthesis = input.llmSynthesis ? stripThinking(input.llmSynthesis) : undefined;
+  const validated = cleanedSynthesis
+    ? validateGroundedSynthesis(cleanedSynthesis, input.retrieval.records)
     : null;
-  const synthesis = validated?.valid ? escapeMarkdown(input.llmSynthesis!.trim()) : deterministicSynthesis(input.retrieval.records, input.query);
+  const synthesis = validated?.valid ? escapeMarkdown(cleanedSynthesis!.trim()) : deterministicSynthesis(input.retrieval.records, input.query);
   const sourceFailures = input.retrieval.receipts
     .filter(({ status }) => status === "rejected")
     .map(({ source, errorCode }) => ({ source, errorCode: errorCode ?? "unknown" }));

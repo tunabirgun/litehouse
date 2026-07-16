@@ -131,18 +131,18 @@ export function recommendBrowserModel(
   capability: BrowserModelCapability,
   models: readonly BrowserModelDescriptor[] = BROWSER_MODELS,
 ): BrowserModelRecommendation {
-  // The compact tier is the universal default: it loads on the widest range of
-  // devices, and the evidence-grounded synthesis task (constrained + validated)
-  // does not need a larger model. Larger tiers stay opt-in for capable machines.
-  const universal = models.find((model) => model.tier === "minimum") ?? models[0];
-  const reasons = [`${universal.label} is the compact default that loads on the widest range of devices.`];
+  // Default to the highest-quality tier: it writes a genuine cited synthesis rather than a
+  // list of sources, and still runs (slowly) on a mid-range machine. The smaller tiers stay
+  // available for constrained or low-memory devices that cannot hold the larger model.
+  const preferred = models.find((model) => model.tier === "quality") ?? models[models.length - 1];
+  const reasons = [`${preferred.label} produces the strongest synthesis and runs on most desktops; it is a larger download and slower than the lighter tiers.`];
   if (
     capability.storageAvailableBytes !== undefined
-    && capability.storageAvailableBytes < universal.storageBytes
+    && capability.storageAvailableBytes < preferred.storageBytes
   ) {
-    reasons.push("This browser reports limited site storage; free space if the download cannot complete.");
+    reasons.push("This browser reports limited site storage; choose a lighter model if the download cannot complete.");
   }
-  return { modelId: universal.id, reasons };
+  return { modelId: preferred.id, reasons };
 }
 
 export function unsupportedCapabilityMessage(reason?: BrowserModelUnsupportedReason): string {
