@@ -131,11 +131,11 @@ export function recommendBrowserModel(
   capability: BrowserModelCapability,
   models: readonly BrowserModelDescriptor[] = BROWSER_MODELS,
 ): BrowserModelRecommendation {
-  // Default to the highest-quality tier: it writes a genuine cited synthesis rather than a
-  // list of sources, and still runs (slowly) on a mid-range machine. The smaller tiers stay
-  // available for constrained or low-memory devices that cannot hold the larger model.
-  const preferred = models.find((model) => model.tier === "quality") ?? models[models.length - 1];
-  const reasons = [`${preferred.label} produces the strongest synthesis and runs on most desktops; it is a larger download and slower than the lighter tiers.`];
+  // Default to the balanced tier: it writes a genuine cited synthesis and still runs
+  // (slowly) on a mid-range machine. The lighter tier is a fallback for constrained
+  // devices; the quality tier is an opt-in upgrade for high-memory machines.
+  const preferred = models.find((model) => model.tier === "balanced") ?? models[0];
+  const reasons = [`${preferred.label} produces a genuine synthesis and runs on most desktops; a lighter and a stronger tier are both available.`];
   if (
     capability.storageAvailableBytes !== undefined
     && capability.storageAvailableBytes < preferred.storageBytes
