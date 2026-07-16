@@ -140,17 +140,20 @@ function blocksToLatex(markdown: string): string {
   return out.join("\n");
 }
 
-// A classic \maketitle block. The Litehouse wordmark sits above the title as a small-caps
-// kicker; the retrieval digest follows in a small line that breaks safely.
+// A minimal, functional title block: a restrained small-caps Litehouse wordmark, the
+// title, one metadata line (document type and date), and the retrieval digest that
+// breaks safely. No separate title page and no redundant author line.
 function titleBlock(title: string, date: string, sha: string): string {
-  return String.raw`\title{{\normalsize\scshape Litehouse}\\[0.55em]
-${escapeSpecials(title)}\\[0.2em]
-{\large\mdseries\itshape Evidence-locked literature review}}
-\author{Litehouse}
-\date{Browser-local synthesis \textperiodcentered\ ${escapeSpecials(date)}}
-\maketitle
-\begin{center}\footnotesize Retrieval SHA-256: \hashtoken{${escapeSpecials(sha)}}\end{center}
-\vspace{0.9em}
+  return String.raw`\thispagestyle{empty}
+\begin{center}
+{\footnotesize\scshape Litehouse}\\[1.15em]
+{\LARGE ${escapeSpecials(title)}\par}\vspace{0.7em}
+{\footnotesize Evidence-locked literature review \textperiodcentered\ ${escapeSpecials(date)}}\\[0.5em]
+{\scriptsize Retrieval SHA-256\enspace\hashtoken{${escapeSpecials(sha)}}}
+\end{center}
+\vspace{0.4em}
+\hrule
+\vspace{1.4em}
 `;
 }
 
