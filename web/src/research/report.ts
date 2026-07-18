@@ -31,6 +31,7 @@ export interface SynthesisValidation {
   unknownCitations: string[];
   uncitedParagraphs: number[];
   unrecognizedDois: string[];
+  unflaggedRetraction: boolean;
 }
 
 function sourceId(index: number): string {
@@ -69,6 +70,11 @@ function invertName(name: string): string {
     const initials = given.split(/\s+/u).map((g) => (g[0] ? `${g[0].toUpperCase()}.` : "")).filter(Boolean).join(" ");
     return initials ? `${surname}, ${initials}` : surname;
   }
+  // Institutional/organizational authors are not "Given … Surname"; keep them verbatim so
+  // "European Bioinformatics Institute" does not invert to "Institute, E. B.".
+  if (/\b(university|institute|organi[sz]ation|foundation|centre|center|consortium|agency|laborator(?:y|ies)|ministry|department|council|society|association|company|inc\.?|ltd\.?)\b/iu.test(clean)) {
+    return clean;
+  }
   const parts = clean.split(" ");
   if (parts.length === 1) return parts[0];
   const last = parts[parts.length - 1];
@@ -90,13 +96,20 @@ function apaAuthors(contributors: readonly string[]): string {
 
 // One APA-7 reference, keyed by [S#] so synthesis citations resolve; no separate ordinal.
 function recordCitation(record: LiteratureRecord, index: number): string {
-  const authors = apaAuthors(record.contributors);
   const year = record.publicationDate?.slice(0, 4) ?? "n.d.";
-  const title = record.title.replace(/\s*\.\s*$/u, "");
+  // Keep a question/exclamation terminal but never double a period (e.g. "…precise?." → "…precise?").
+  const rawTitle = record.title.trim();
+  const terminal = /[?!]$/u.test(rawTitle) ? rawTitle.slice(-1) : ".";
+  const title = `${escapeMarkdown(rawTitle.replace(/[.?!]+$/u, ""))}${terminal}`;
   const venue = record.venue ? ` *${escapeMarkdown(record.venue)}*.` : "";
   const doi = record.doi ? `https://doi.org/${record.doi}` : record.landingUrl;
   const url = doi ? ` ${doi}` : "";
-  return `**[${sourceId(index)}]** ${escapeMarkdown(authors)} (${year}). ${escapeMarkdown(title)}.${venue}${url}`;
+  const retracted = record.isRetracted ? "**[RETRACTED]** " : "";
+  // APA 7: a work with no author moves the title to the author position.
+  const heading = record.contributors.length
+    ? `${escapeMarkdown(apaAuthors(record.contributors))} (${year}). ${retracted}${title}`
+    : `${retracted}${title} (${year}).`;
+  return `**[${sourceId(index)}]** ${heading}${venue}${url}`;
 }
 
 function accessTag(record: LiteratureRecord): string {
@@ -132,13 +145,14 @@ function deterministicSynthesis(records: LiteratureRecord[], query: string): str
   const shown = records.slice(0, 12);
   const lead = `Without a connected model, Litehouse lists the retrieved evidence rather than writing a synthesis. It accepted ${records.length} work${records.length === 1 ? "" : "s"} for “${query.trim()}”, ordered by topical relevance, cross-source corroboration, and citation signal; each is described only from its own bibliographic metadata and abstract. Connect a local model or API provider in Settings for an AI-written synthesis of these sources.`;
   const entries = shown.map((record, index) => {
-    const authors = record.contributors.length ? apaAuthors(record.contributors) : "Unknown author";
     const year = record.publicationDate?.slice(0, 4) ?? "n.d.";
+    const byline = record.contributors.length ? `${escapeMarkdown(apaAuthors(record.contributors))} (${year})` : `(${year})`;
     const venue = record.venue ? `, *${escapeMarkdown(record.venue)}*` : "";
     const abstract = record.abstract
       ? ` ${escapeMarkdown(excerpt(record.abstract))}`
       : " No abstract was available from the source metadata.";
-    return `- **${escapeMarkdown(record.title.replace(/\s*\.\s*$/u, ""))}** — ${escapeMarkdown(authors)} (${year})${venue}; ${accessTag(record)}.${abstract} [${sourceId(index)}]`;
+    const retracted = record.isRetracted ? "**[RETRACTED]** " : "";
+    return `- ${retracted}**${escapeMarkdown(record.title.replace(/\s*\.\s*$/u, ""))}** — ${byline}${venue}; ${accessTag(record)}.${abstract} [${sourceId(index)}]`;
   }).join("\n");
   const remaining = records.length - shown.length;
   const more = remaining > 0 ? `\n\n${remaining} further work${remaining === 1 ? " is" : "s are"} listed in the references below.` : "";
@@ -224,9 +238,10 @@ export function synthesisPrompt(query: string, records: LiteratureRecord[], dept
     authors: record.contributors.slice(0, 8),
     date: record.publicationDate ?? null,
     venue: record.venue ?? null,
-    abstract: record.abstract ? record.abstract.slice(0, budget.abstractChars) : null,
+    abstract: record.abstract ? excerpt(record.abstract, budget.abstractChars) : null,
     evidence_level: record.openFullTextUrl ? "open_full_text_link_identified" : record.abstract ? "abstract" : "metadata_only",
     doi: record.doi ?? null,
+    ...(record.isRetracted ? { retracted: true } : {}),
   }));
   return [
     "Write a literature-review synthesis in flowing prose paragraphs, using only the evidence JSON below.",
@@ -234,6 +249,7 @@ export function synthesisPrompt(query: string, records: LiteratureRecord[], dept
     "Every factual sentence ends with one or more citations like [S1] or [S1, S2].",
     "Never infer a result from a title or metadata alone. If an abstract is absent, note only bibliographic relevance.",
     "Do not introduce URLs, DOIs, authors, dates, or statistics absent from the JSON.",
+    "If an evidence item has retracted:true, state plainly that it has been retracted and never present its findings as reliable support.",
     ...SYNTHESIS_GUIDANCE[depth],
     `Research query: ${query}`,
     `Evidence JSON: ${JSON.stringify(evidence)}`,
@@ -263,11 +279,26 @@ export function validateGroundedSynthesis(text: string, records: LiteratureRecor
   const foundDois = [...text.matchAll(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/giu)].map((match) => match[0].replace(/[.,;)]$/u, "").toLowerCase());
   const unrecognizedDois = [...new Set(foundDois.filter((candidate) => !allowedDois.has(candidate)))];
 
+  // A synthesis that cites a retracted source without saying so is not evidence-locked; treat
+  // it as a contract violation. Scope the check to the paragraph(s) actually citing the
+  // retracted source: "retraction" is common domain vocabulary (neurite/clot retraction), so a
+  // stray mention elsewhere must not count as disclosure.
+  const retractedIds = records.map((record, index) => (record.isRetracted ? sourceId(index) : "")).filter(Boolean);
+  const bracketPattern = /\[(S\d+(?:\s*,\s*S\d+)*)\]/gu;
+  const paragraphCitations = (paragraph: string) =>
+    [...paragraph.matchAll(bracketPattern)].flatMap((match) => match[1].split(",").map((value) => value.trim()));
+  const paragraphs = text.split(/\n\s*\n/gu);
+  const unflaggedRetraction = retractedIds.some((id) => {
+    const citingParagraphs = paragraphs.filter((paragraph) => paragraphCitations(paragraph).includes(id));
+    return citingParagraphs.length > 0 && !citingParagraphs.some((paragraph) => /retract/iu.test(paragraph));
+  });
+
   return {
-    valid: cited.length > 0 && unknownCitations.length === 0 && uncitedParagraphs.length <= uncitedAllowed && unrecognizedDois.length === 0,
+    valid: cited.length > 0 && unknownCitations.length === 0 && uncitedParagraphs.length <= uncitedAllowed && unrecognizedDois.length === 0 && !unflaggedRetraction,
     unknownCitations,
     uncitedParagraphs,
     unrecognizedDois,
+    unflaggedRetraction,
   };
 }
 
@@ -276,20 +307,33 @@ export async function createGroundedReport(input: {
   retrieval: LiteratureSearchResult;
   llmSynthesis?: string;
   synthesisFailure?: string;
+  requestedCitationStyle?: string;
+  depth?: SynthesisDepth;
+  synthesisOrigin?: "browser-model" | "remote-provider" | "deterministic";
+  providerLabel?: string;
 }): Promise<GroundedReport> {
   const createdAt = new Date().toISOString();
   const cleanedSynthesis = input.llmSynthesis ? stripThinking(input.llmSynthesis) : undefined;
+  // Validate against the exact evidence slice the model was shown, not the full corpus, so a
+  // hallucinated [S#] for a record the model never saw cannot pass as grounded.
+  const shownRecords = input.retrieval.records.slice(0, SYNTHESIS_BUDGETS[input.depth ?? "standard"].evidenceLimit);
   const validated = cleanedSynthesis
-    ? validateGroundedSynthesis(cleanedSynthesis, input.retrieval.records)
+    ? validateGroundedSynthesis(cleanedSynthesis, shownRecords)
     : null;
   const synthesis = validated?.valid ? escapeMarkdown(cleanedSynthesis!.trim()) : deterministicSynthesis(input.retrieval.records, input.query);
   const sourceFailures = input.retrieval.receipts
     .filter(({ status }) => status === "rejected")
     .map(({ source, errorCode }) => ({ source, errorCode: errorCode ?? "unknown" }));
   const references = input.retrieval.records.map(recordCitation).join("\n\n");
+  const requestedStyle = input.requestedCitationStyle && input.requestedCitationStyle !== "apa-7" ? input.requestedCitationStyle : "";
   const limitations = [
     "- This report distinguishes metadata, abstract, and identified open-full-text availability; it does not treat a title as evidence of a result.",
     "- Citation counts are source metadata captured at retrieval time, not a universal measure of scientific quality.",
+    "- Citation validation confirms every [S#] tag points to a retrieved source and that most paragraphs carry a citation; it does not verify that a cited sentence's specific numbers, wording, or claim actually appear in that source. Confirm any figure or quotation against the source itself.",
+    "- Retraction status is only detected where a selected source exposes it (OpenAlex retraction flag, Crossref update notices, Europe PMC publication types); the absence of a [RETRACTED] tag is not proof a work was not retracted.",
+    requestedStyle
+      ? `- References are rendered in APA 7 in this release regardless of the ${requestedStyle} style recorded with the request.`
+      : "",
     input.retrieval.boundaryAudit && (input.retrieval.boundaryAudit.requested.fromDate || input.retrieval.boundaryAudit.requested.toDate)
       ? "- Publication dates were enforced after parsing for every source. Records with missing dates, or partial dates not wholly contained in the exact interval, were excluded."
       : "",
@@ -316,10 +360,17 @@ export async function createGroundedReport(input: {
   const failureRows = sourceFailures.length
     ? sourceFailures.map(({ source, errorCode }) => `- ${source}: ${errorCode}`).join("\n")
     : "- None";
+  // Only the shown synthesis path determines the provenance claim: if the remote text failed
+  // validation the displayed synthesis is the local deterministic listing, so "local" holds.
+  const remoteSynthesis = Boolean(validated?.valid && input.synthesisOrigin === "remote-provider");
+  const providerLabel = input.providerLabel?.trim();
+  const provenanceLede = remoteSynthesis
+    ? `*An evidence-locked literature overview. Sources are retrieved directly from open scholarly APIs in your browser; the synthesis was written by the ${providerLabel || "connected"} provider you configured. Nothing is sent to a Litehouse server.*`
+    : "*An evidence-locked literature overview, generated locally in your browser. Sources are retrieved directly from open scholarly APIs; nothing is sent to a Litehouse server.*";
   const markdown = [
     `# ${escapeMarkdown(input.query)}`,
     "",
-    "*An evidence-locked literature overview, generated locally in your browser. Sources are retrieved directly from open scholarly APIs; nothing is sent to a Litehouse server.*",
+    provenanceLede,
     "",
     `## ${validated?.valid ? "Synthesis" : "Evidence overview"}`,
     "",
@@ -337,7 +388,9 @@ export async function createGroundedReport(input: {
     "",
     "## Provenance & integrity",
     "",
-    `Generated locally in the browser: ${createdAt}`,
+    remoteSynthesis
+      ? `Retrieval ran locally in the browser; synthesis written by the ${providerLabel || "connected"} provider you configured: ${createdAt}`
+      : `Generated locally in the browser: ${createdAt}`,
     "",
     `Retrieval SHA-256: \`${input.retrieval.resultSha256}\``,
     "",

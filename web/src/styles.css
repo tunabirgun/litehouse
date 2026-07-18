@@ -662,6 +662,25 @@ select {
   text-transform: uppercase;
 }
 
+/* Evidence-integrity mismatch is a security signal: give it danger styling so it can never
+   read as a verified receipt. Mirrors the reader page's .reader-integrity.mismatch pattern. */
+.receipt-status.is-mismatch {
+  color: var(--danger);
+}
+
+.verification-seal.mismatch {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.receipt-mismatch {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-inline-start: 3px solid var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .verification-receipt ul {
   display: flex;
   flex-wrap: wrap;
@@ -1299,6 +1318,13 @@ legend {
   outline: 0;
   color: var(--ink);
   background: transparent;
+}
+
+/* The input clears its own outline, so surface keyboard focus on the wrapping pill instead
+   (WCAG 2.4.7). Mirrors the .lh-library-search and .lh-option-card focus compensators. */
+.reader-search-panel > label:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .reader-search-count {
@@ -2719,6 +2745,28 @@ html[data-motion="full"] .local-mark .status-dot {
 }
 
 @media print {
+  /* Force the light monochrome palette on paper regardless of the on-screen theme.
+     Matches the theme blocks' specificity and wins by source order, so a report
+     printed from dark mode keeps full-contrast ink and links, not washed-out pastels. */
+  html,
+  html[data-theme],
+  html:not([data-theme]) {
+    color-scheme: light;
+    --canvas: #fff;
+    --surface: #fff;
+    --surface-raised: #fff;
+    --ink: #000;
+    --ink-soft: #2b2b2b;
+    --ink-faint: #444;
+    --line: #bbb;
+    --line-strong: #888;
+    --accent: #1f4c5f;
+    --accent-soft: transparent;
+    --danger: #7a2525;
+    --danger-soft: transparent;
+    --shadow: none;
+  }
+
   .masthead,
   .primary-nav,
   .report-actions,

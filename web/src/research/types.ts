@@ -23,6 +23,7 @@ export interface LiteratureRecord {
   openFullTextUrl?: string;
   licenseUrl?: string;
   citationCount?: number;
+  isRetracted?: boolean;
   retrievedAt: string;
   responseSha256: string;
   corroboratedBy: BrowserSourceId[];

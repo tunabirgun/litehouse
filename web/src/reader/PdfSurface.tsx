@@ -95,7 +95,10 @@ export function PdfSurface({
     textContainer.replaceChildren();
     const render = async () => {
       page = await document.getPage(pageNumber);
-      if (cancelled) return;
+      if (cancelled) {
+        page.cleanup();
+        return;
+      }
       const viewport = page.getViewport({ scale: zoom, rotation });
       const outputScale = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.floor(viewport.width * outputScale);
@@ -113,6 +116,9 @@ export function PdfSurface({
         background: "rgb(255, 255, 255)",
       });
       const content = await page.getTextContent();
+      // A page/zoom/rotation change during getTextContent must not let this stale continuation
+      // overwrite the new page's shared text model or render into the shared text-layer node.
+      if (cancelled) return;
       const model = textModel(content.items);
       modelRef.current = model;
       textLayer = new TextLayer({ textContentSource: content, container: textContainer, viewport });

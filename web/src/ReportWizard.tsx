@@ -59,8 +59,25 @@ const BROWSER_SOURCES = new Set<BrowserSourceId>([
   "datacite",
   "europe-pmc",
   "semantic-scholar",
-  "library-of-congress",
 ]);
+
+// Keep only sources that are actually implemented, so a stale stored draft or settings blob
+// (e.g. a since-removed source) can never leave the selection empty and throw downstream.
+function sanitiseSources(values: unknown, fallback: string[]): string[] {
+  const filtered = Array.isArray(values)
+    ? values.filter((value): value is BrowserSourceId => typeof value === "string" && BROWSER_SOURCES.has(value as BrowserSourceId))
+    : [];
+  return filtered.length ? filtered : fallback;
+}
+
+const CITATION_LABELS: Record<string, string> = {
+  "apa-7": "APA 7",
+  ieee: "IEEE",
+  "chicago-author-date": "Chicago author–date",
+  "mla-9": "MLA 9",
+  vancouver: "Vancouver",
+  "harvard-cite-them-right": "Harvard",
+};
 
 function localIsoDate(date: Date) {
   const year = date.getFullYear();
@@ -92,9 +109,12 @@ export function createDefaultDraft(): WizardData {
   const from = new Date(to);
   from.setFullYear(from.getFullYear() - 1);
   const preferences = readPreferenceDefaults();
-  const preferredSources = preferences.sources
-    ? Object.entries(preferences.sources).filter(([, enabled]) => enabled).map(([source]) => source)
-    : [];
+  const preferredSources = sanitiseSources(
+    preferences.sources
+      ? Object.entries(preferences.sources).filter(([, enabled]) => enabled).map(([source]) => source)
+      : [],
+    [],
+  );
   return {
     mode: "one-off",
     topic: "",
@@ -133,7 +153,7 @@ function readDraft(): WizardData {
       disciplines: Array.isArray(parsed.disciplines) ? parsed.disciplines : defaults.disciplines,
       workTypes: Array.isArray(parsed.workTypes) ? parsed.workTypes : defaults.workTypes,
       expertise: Array.isArray(parsed.expertise) ? parsed.expertise : defaults.expertise,
-      sources: Array.isArray(parsed.sources) ? parsed.sources : defaults.sources,
+      sources: sanitiseSources(parsed.sources, defaults.sources),
       ranking: Array.isArray(parsed.ranking) ? parsed.ranking : defaults.ranking,
       synthesisMode: parsed.synthesisMode === "evidence" ? "evidence" : "ai",
     };
@@ -199,7 +219,7 @@ const copy = {
   noBypass: "Litehouse never bypasses authentication, paywalls, access controls, or publisher terms.",
   sources: "Scholarly sources",
   ranking: "Impact-ranking intent",
-  rankingHelp: "Ranking changes reading order, not scientific truth. Every signal stays visible and separate from evidence strength.",
+  rankingHelp: "Ranking changes reading order, not scientific truth. In this browser release the intent is recorded with your request; retrieval orders results by topical relevance, cross-source corroboration, and citation signal.",
   rankingTruth: "No citation, venue, or attention signal is treated as proof that a claim is true.",
   outputTitle: "Shape the report",
   synthesisTitle: "Synthesis mode",
@@ -216,8 +236,9 @@ const copy = {
   deepHelp: "Comprehensive, multi-theme synthesis over more sources. Slowest, uses more memory.",
   depthWarning: "More comprehensive reports read more sources and write a longer synthesis, so on-device generation runs noticeably longer. Deep also widens the model's context window and uses more memory.",
   recommendations: "Include bounded reading recommendations",
-  recommendationsHelp: "Recommendations cite their evidence and explain why the work may merit closer reading.",
+  recommendationsHelp: "Recommendations cite their evidence and explain why the work may merit closer reading. Recorded with your request; not yet applied to browser synthesis.",
   citation: "Reference style",
+  citationNote: "Browser reports render APA 7 in this release. Your selection is recorded with the saved request.",
   reviewTitle: "Review the retrieval contract",
   reviewHelp: "These choices become an immutable request revision. Later edits create a new revision so prior reports remain reproducible.",
   inquiry: "Inquiry",
@@ -303,7 +324,6 @@ const optionCopy = {
     ["datacite", "DataCite"],
     ["europe-pmc", "Europe PMC"],
     ["semantic-scholar", "Semantic Scholar"],
-    ["library-of-congress", "Library of Congress"],
   ],
   ranking: [
     ["recent-attention", "Recent scholarly attention"],
@@ -455,6 +475,11 @@ export async function executeGuidedRequest(
   // deterministic listing regardless of whether a model is loaded. Reasoning models spend
   // tokens on a hidden <think> block, so each depth's maxTokens leaves room for reasoning
   // plus the synthesis inside its context window.
+  // Track how the shown synthesis was produced and at what depth, so the report validates
+  // against the exact evidence slice the model saw and states its provenance honestly.
+  let effectiveDepth: SynthesisDepth = draft.depth;
+  let synthesisOrigin: "browser-model" | "remote-provider" | "deterministic" = "deterministic";
+  let providerLabel: string | undefined;
   const remote = draft.synthesisMode === "ai" ? getSessionRemoteProvider() : null;
   if (remote) {
     onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the connected model…" });
@@ -466,6 +491,8 @@ export async function executeGuidedRequest(
         maxOutputTokens: SYNTHESIS_BUDGETS[draft.depth].maxTokens,
       });
       llmSynthesis = generated.text;
+      synthesisOrigin = "remote-provider";
+      providerLabel = remote.config.provider;
     } catch (error) {
       synthesisFailure = error instanceof RemoteProviderError ? error.code : "unknown";
     }
@@ -475,6 +502,7 @@ export async function executeGuidedRequest(
     const requested = SYNTHESIS_BUDGETS[draft.depth];
     const availableContext = await browserModelRuntime.ensureContextWindow(requested.contextWindow);
     const depth: SynthesisDepth = availableContext >= requested.contextWindow ? draft.depth : "standard";
+    effectiveDepth = depth;
     const budget = SYNTHESIS_BUDGETS[depth];
     const startedAt = Date.now();
     onProgress?.({ phase: "synthesis", label: "Writing the synthesis with the on-device model…" });
@@ -489,6 +517,7 @@ export async function executeGuidedRequest(
           onProgress?.({ phase: "synthesis", label: `Writing the synthesis · ${tokens} tokens`, etaSeconds });
         },
       });
+      synthesisOrigin = "browser-model";
     } catch {
       synthesisFailure = "browser-model-generation";
     }
@@ -499,6 +528,10 @@ export async function executeGuidedRequest(
     retrieval,
     llmSynthesis,
     synthesisFailure,
+    requestedCitationStyle: draft.citation,
+    depth: effectiveDepth,
+    synthesisOrigin,
+    providerLabel,
   });
   await saveBrowserReport(report);
   if (draft.mode === "one-off") return { kind: "browser", report };
@@ -603,7 +636,9 @@ export function ReportWizardPage() {
       );
     }
     if (step === 2) return Boolean(draft.disciplines.length && draft.workTypes.length && draft.expertise.length);
-    if (step === 3) return Boolean(draft.sources.length && draft.ranking.length);
+    // Ranking intent is optional: it is recorded with the request but does not gate the
+    // browser build's retrieval, so requiring it would block on an unwired control.
+    if (step === 3) return Boolean(draft.sources.length);
     return true;
   }
 
@@ -620,10 +655,7 @@ export function ReportWizardPage() {
       if (!draft.workTypes.length) return "Select at least one work type before continuing.";
       return "Select at least one expertise level before continuing.";
     }
-    if (step === 3) {
-      if (!draft.sources.length) return "Select at least one scholarly source before continuing.";
-      return "Select at least one impact-ranking intent before continuing.";
-    }
+    if (step === 3) return "Select at least one scholarly source before continuing.";
     return c.required;
   }
 
@@ -735,14 +767,16 @@ export function ReportWizardPage() {
           )}
 
           {error && <p ref={errorRef} className="lh-form-error" role="alert" tabIndex={-1}>{error}</p>}
-          {step < 5 && (
+          {!saved && (
             <div className="lh-wizard-actions">
-              <button className="button button-secondary" type="button" onClick={() => setStep((current) => Math.max(0, current - 1))} disabled={step === 0}>
+              <button className="button button-secondary" type="button" onClick={() => { setStep((current) => Math.max(0, current - 1)); setError(""); }} disabled={step === 0 || submitting}>
                 <ArrowLeft aria-hidden="true" size={17} /> {c.previous}
               </button>
-              <button className="button button-primary" type="button" onClick={next}>
-                {c.next} <ArrowRight aria-hidden="true" size={17} />
-              </button>
+              {step < steps.length - 1 && (
+                <button className="button button-primary" type="button" onClick={next}>
+                  {c.next} <ArrowRight aria-hidden="true" size={17} />
+                </button>
+              )}
             </div>
           )}
         </form>
@@ -883,6 +917,7 @@ function OutputStep({ c, draft, update }: { c: Copy; draft: WizardData; update: 
       </fieldset>
       <label className="lh-checkbox lh-feature-check"><input type="checkbox" checked={draft.recommendations} onChange={(event) => update("recommendations", event.target.checked)} /><span><b>{c.recommendations}</b><small>{c.recommendationsHelp}</small></span></label>
       <label className="lh-field lh-select-field"><span>{c.citation}</span><select value={draft.citation} onChange={(event) => update("citation", event.target.value)}><option value="apa-7">APA 7</option><option value="ieee">IEEE</option><option value="chicago-author-date">Chicago author–date</option><option value="mla-9">MLA 9</option><option value="vancouver">Vancouver</option><option value="harvard-cite-them-right">Harvard</option></select></label>
+      <p className="lh-field-help">{c.citationNote}</p>
     </WizardSection>
   );
 }
@@ -975,7 +1010,7 @@ function ReviewStep({
         <div><dt>{c.audience}</dt><dd>{labels.expertise}<span>{labels.disciplines} · {labels.workTypes}</span></dd></div>
         <div><dt>{c.accessReview}</dt><dd>{draft.accessPolicy === "open-only" ? c.openOnly : c.includeAbstracts}<span>{labels.sources}</span></dd></div>
         <div><dt>{c.rankingReview}</dt><dd>{labels.ranking}<span>{c.rankingTruth}</span></dd></div>
-        <div><dt>{c.deliverables}</dt><dd>{c[draft.depth]}<span>{draft.citation} · {draft.recommendations ? c.recommendations : "—"}</span></dd></div>
+        <div><dt>{c.deliverables}</dt><dd>{c[draft.depth]}<span>{draft.citation === "apa-7" ? "APA 7" : `APA 7 · recorded: ${CITATION_LABELS[draft.citation] ?? draft.citation}`} · {draft.recommendations ? c.recommendations : "—"}</span></dd></div>
       </dl>
       <p className="lh-local-caveat">{c.localCaveat}</p>
       {submitting && progress && (

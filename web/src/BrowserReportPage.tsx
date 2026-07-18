@@ -88,6 +88,7 @@ export function BrowserReportPage() {
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -145,7 +146,7 @@ export function BrowserReportPage() {
       </header>
 
       <details className="verification-receipt" open>
-        <summary><span className="verification-seal" aria-hidden="true">{evidenceVerified ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}</span><span><small className={`receipt-status${evidenceVerified ? "" : " is-mismatch"}`}>{evidenceVerified ? <><Check size={14} /> Evidence verified</> : <><TriangleAlert size={14} /> Evidence mismatch</>}</small><b>Integrity receipt</b></span></summary>
+        <summary><span className={`verification-seal${evidenceVerified ? "" : " mismatch"}`} aria-hidden="true">{evidenceVerified ? <ShieldCheck size={22} /> : <ShieldAlert size={22} />}</span><span><small className={`receipt-status${evidenceVerified ? "" : " is-mismatch"}`}>{evidenceVerified ? <><Check size={14} /> Evidence verified</> : <><TriangleAlert size={14} /> Evidence mismatch</>}</small><b>Integrity receipt</b></span></summary>
         <dl className="lh-preparation-stats">
           <div><dt>Report SHA-256</dt><dd><code>{report.reportSha256}</code></dd></div>
           <div><dt>Retrieval SHA-256</dt><dd><code>{report.retrievalSha256}</code></dd></div>
@@ -190,12 +191,15 @@ export function BrowserReportPage() {
         title="Delete this report?"
         body={DELETE_REPORT_BODY}
         confirmLabel="Delete report"
+        busy={deleting}
         onConfirm={() => {
+          if (deleting) return;
+          setDeleting(true);
           void deleteBrowserReport(report.id)
             .then(() => navigate("/library", { state: { status: "Report deleted from this browser." } }))
-            .catch(() => setConfirmOpen(false));
+            .catch(() => { setDeleting(false); setConfirmOpen(false); });
         }}
-        onCancel={() => setConfirmOpen(false)}
+        onCancel={() => { if (!deleting) setConfirmOpen(false); }}
       />
     </main>
   );

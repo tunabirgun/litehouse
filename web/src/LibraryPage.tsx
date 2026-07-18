@@ -147,6 +147,7 @@ export function LibraryPage() {
   const [status, setStatus] = useState("");
   const [exportItemId, setExportItemId] = useState<string | null>(null);
   const [deleteItemId, setDeleteItemId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [items, setItems] = useState<readonly LibraryItemFixture[]>([]);
   const [vaultState, setVaultState] = useState<"loading" | "live" | "error">(
     "loading",
@@ -304,7 +305,8 @@ export function LibraryPage() {
   }, []);
 
   async function deleteReport(item: LibraryItemFixture) {
-    if (!item.browserReportId) return;
+    if (!item.browserReportId || deleting) return;
+    setDeleting(true);
     try {
       await deleteBrowserReport(item.browserReportId);
       await garbageCollectBrowserArtifacts();
@@ -312,8 +314,10 @@ export function LibraryPage() {
       setStatus(c.reportDeleted);
     } catch {
       setStatus(c.loadFailed);
+    } finally {
+      setDeleting(false);
+      setDeleteItemId(null);
     }
-    setDeleteItemId(null);
     // The deleted card and its menu trigger are gone; move focus to the always-present search.
     window.setTimeout(() => searchRef.current?.focus(), 0);
   }
@@ -488,6 +492,7 @@ export function LibraryPage() {
         title={c.deleteReportTitle}
         body={c.deleteReportBody}
         confirmLabel={c.deleteReport}
+        busy={deleting}
         onConfirm={() => { if (deleteItem) void deleteReport(deleteItem); }}
         onCancel={closeDelete}
       />

@@ -181,6 +181,7 @@ function parseOpenAlex(payload: JsonObject, context: ParseContext): LiteratureRe
       openFullTextUrl: access.is_oa === true ? safeUrl(access.oa_url) : undefined,
       licenseUrl: safeUrl(primary.license),
       citationCount: integer(item.cited_by_count),
+      isRetracted: item.is_retracted === true || undefined,
     });
     return record ? [record] : [];
   });
@@ -201,10 +202,11 @@ function parseCrossref(payload: JsonObject, context: ParseContext): LiteratureRe
       contributors,
       publicationDate: crossrefDate(item.published ?? item["published-print"] ?? item.issued),
       language: text(item.language, 64),
-      venue: firstText(item["container-title"]),
+      venue: firstText(item["container-title"]) ?? text(item.publisher, 1_000),
       abstract: text(item.abstract, 100_000),
       landingUrl: safeUrl(item.URL),
       citationCount: integer(item["is-referenced-by-count"]),
+      isRetracted: array(item["update-to"]).some((update) => object(update).type === "retraction") || undefined,
     });
     return record ? [record] : [];
   });
@@ -216,10 +218,19 @@ function parseEuropePmc(payload: JsonObject, context: ParseContext): LiteratureR
     const urls = array(object(item.fullTextUrlList).fullTextUrl).map(object);
     const pdf = urls.find((value) => value.documentStyle === "pdf");
     const pmid = text(item.pmid, 256);
+    // Europe PMC (resultType=core) returns pubTypeList/meshHeadingList, not a flat `pubType`.
+    const pubTypes = array(object(item.pubTypeList).pubType).map((value) => text(value)).filter((value): value is string => Boolean(value));
+    const meshTerms = array(object(item.meshHeadingList).meshHeading).map(object)
+      .filter((mesh) => mesh.majorTopic_YN === "Y")
+      .map((mesh) => text(mesh.descriptorName, 256))
+      .filter((value): value is string => Boolean(value))
+      .slice(0, 30);
     const record = createRecord(context, {
       sourceRecordId: text(item.id) ?? pmid ?? text(item.pmcid) ?? "",
       title: text(item.title) ?? "",
-      kind: text(item.pubType, 100) ?? "article",
+      kind: pubTypes.join(", ") || "article",
+      isRetracted: pubTypes.some((type) => type.toLocaleLowerCase().includes("retracted")) || undefined,
+      fieldsOfStudy: meshTerms.length ? meshTerms : undefined,
       doi: doi(item.doi),
       contributors: contributorNames(array(object(item.authorList).author), (author) => author.fullName),
       publicationDate: isoDate(item.firstPublicationDate ?? item.firstIndexDate),
@@ -317,10 +328,12 @@ const OPENALEX_WORK_TYPES: Record<string, string[]> = {
 
 const CROSSREF_WORK_TYPES: Record<string, string[]> = {
   "journal-article": ["journal-article"],
+  "book-chapter": ["book-chapter"],
   conference: ["proceedings-article"],
   preprint: ["posted-content"],
   dataset: ["dataset"],
   thesis: ["dissertation"],
+  report: ["report"],
 };
 
 const SEMANTIC_SCHOLAR_WORK_TYPES: Record<string, string[]> = {
@@ -749,6 +762,7 @@ function mergeByTitle(records: LiteratureRecord[]): LiteratureRecord[] {
       openFullTextUrl: current.openFullTextUrl ?? record.openFullTextUrl,
       landingUrl: current.landingUrl ?? record.landingUrl,
       citationCount: Math.max(current.citationCount ?? 0, record.citationCount ?? 0) || undefined,
+      isRetracted: current.isRetracted || record.isRetracted || undefined,
       corroboratedBy: [...new Set([...current.corroboratedBy, ...record.corroboratedBy])],
     });
   }
@@ -778,6 +792,7 @@ function mergeRecords(records: LiteratureRecord[]): LiteratureRecord[] {
       openFullTextUrl: current.openFullTextUrl ?? record.openFullTextUrl,
       licenseUrl: current.licenseUrl ?? record.licenseUrl,
       citationCount: Math.max(current.citationCount ?? 0, record.citationCount ?? 0) || undefined,
+      isRetracted: current.isRetracted || record.isRetracted || undefined,
       corroboratedBy: [...new Set([...current.corroboratedBy, ...record.corroboratedBy])],
     });
   }
@@ -860,7 +875,7 @@ function normalizedDisciplineFields(fields: string[]): Set<string> {
   for (const rawField of fields) {
     const field = rawField.normalize("NFKD").toLocaleLowerCase();
     if (/history|philosoph|linguistic|literature|religion|humanit/u.test(field)) result.add("humanities");
-    if (/\bart\b|design|visual|music|theat|perform/u.test(field)) result.add("arts");
+    if (/\barts?\b|design|visual|music|theat|perform/u.test(field)) result.add("arts");
     if (/sociolog|psycholog|econom|business|political|education|geograph|social/u.test(field)) result.add("social-sciences");
     if (/physics|chemistry|mathemat|geology|environmental|earth science|natural science/u.test(field)) result.add("natural-sciences");
     if (/biology|medicine|medical|health|agricultur|life science/u.test(field)) result.add("life-sciences");
@@ -991,6 +1006,7 @@ function relevanceScore(record: LiteratureRecord, terms: string[]): number {
   score += record.corroboratedBy.length * 2;
   score += Math.min(3, Math.log10((record.citationCount ?? 0) + 1));
   if (JUNK_TITLE.test(record.title)) score -= 12;
+  if (record.isRetracted) score -= 15;
   if (!record.abstract && !record.openFullTextUrl) score -= 2;
   return score;
 }

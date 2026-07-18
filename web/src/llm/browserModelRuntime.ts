@@ -214,6 +214,8 @@ export class BrowserModelRuntime {
   private cancelLoad: (() => void) | null = null;
   // Context window the loaded engine was last reloaded with; 0 when no engine is live.
   private loadedContextWindow = 0;
+  // True while completeChat is streaming, so remove()/cancel() do not tear down a live engine.
+  private generating = false;
 
   constructor(private readonly dependencies: BrowserModelRuntimeDependencies = defaultDependencies()) {}
 
@@ -231,7 +233,15 @@ export class BrowserModelRuntime {
 
   private async webLlm(): Promise<WebLlmRuntimeModule> {
     this.webLlmPromise ??= this.dependencies.loadWebLlm();
-    const module = await this.webLlmPromise;
+    let module: WebLlmRuntimeModule;
+    try {
+      module = await this.webLlmPromise;
+    } catch (error) {
+      // Never cache a rejected import: a transient failure (network blip, stale chunk after
+      // a redeploy) would otherwise brick every Retry until a full reload. Clear and rethrow.
+      this.webLlmPromise = null;
+      throw error;
+    }
     this.appConfig ??= createPinnedAppConfig(module.prebuiltAppConfig);
     return module;
   }
@@ -395,6 +405,7 @@ export class BrowserModelRuntime {
   }
 
   cancel(): void {
+    if (this.generating) return;
     if (!["checking-cache", "downloading", "loading"].includes(this.state.phase)) return;
     const modelId = this.state.selectedModelId;
     ++this.operation;
@@ -422,6 +433,10 @@ export class BrowserModelRuntime {
 
   async remove(): Promise<void> {
     if (ACTIVE_PHASES.has(this.state.phase)) return;
+    if (this.generating) {
+      this.update({ progressText: "Finish or stop the current report before removing the model." });
+      return;
+    }
     const modelId = this.state.selectedModelId;
     this.update({ phase: "removing", progressText: "Removing cached model files…", error: null });
     try {
@@ -462,21 +477,42 @@ export class BrowserModelRuntime {
     if (this.loadedContextWindow >= target) return this.loadedContextWindow;
     const modelId = this.state.selectedModelId;
     const engine = this.engine;
+    // If a concurrent cancel()/remove() swaps or drops the engine mid-reload, bail without
+    // clobbering the state they set (the operation counter or the engine identity changes).
+    const operation = this.operation;
+    const isStale = () => operation !== this.operation || this.engine !== engine;
     this.update({ phase: "loading", progressText: "Preparing a wider context window for a comprehensive report…" });
     try {
       await engine.reload(modelId, { context_window_size: target });
+      if (isStale()) return this.loadedContextWindow;
       this.loadedContextWindow = target;
+      this.update({ phase: "ready", progressText: "Model ready in this browser" });
+      return this.loadedContextWindow;
     } catch {
+      if (isStale()) return this.loadedContextWindow;
       // The widen failed and may have left the engine unusable; rebuild at the known-good base.
       try {
         await engine.reload(modelId, { context_window_size: BASE_CONTEXT_WINDOW });
+        if (isStale()) return this.loadedContextWindow;
         this.loadedContextWindow = BASE_CONTEXT_WINDOW;
-      } catch {
+        this.update({ phase: "ready", progressText: "Model ready in this browser" });
+        return this.loadedContextWindow;
+      } catch (rebuildError) {
+        if (isStale()) return this.loadedContextWindow;
+        // Both reloads failed: the engine is dead. Tear it down and surface an error instead of
+        // reporting ready on a broken engine; the caller falls back to the deterministic synthesis.
+        this.worker?.terminate();
+        this.worker = null;
+        this.engine = null;
         this.loadedContextWindow = 0;
+        this.update({
+          phase: "error",
+          progressText: "The model became unusable while widening its context window",
+          error: classifyBrowserModelError(rebuildError),
+        });
+        return 0;
       }
     }
-    this.update({ phase: "ready", progressText: "Model ready in this browser" });
-    return this.loadedContextWindow;
   }
 
   async completeChat(
@@ -493,25 +529,30 @@ export class BrowserModelRuntime {
       top_p: options.topP ?? 0.9,
       max_tokens: options.maxTokens ?? 1_024,
     };
-    if (options.onToken) {
-      const stream = await this.engine.chat.completions.create({ ...request, stream: true }) as unknown as AsyncIterable<StreamChunk>;
-      let streamed = "";
-      let tokens = 0;
-      for await (const chunk of stream) {
-        const delta = chunk.choices?.[0]?.delta?.content ?? "";
-        if (delta) {
-          streamed += delta;
-          tokens += 1;
-          options.onToken(tokens);
+    this.generating = true;
+    try {
+      if (options.onToken) {
+        const stream = await this.engine.chat.completions.create({ ...request, stream: true }) as unknown as AsyncIterable<StreamChunk>;
+        let streamed = "";
+        let tokens = 0;
+        for await (const chunk of stream) {
+          const delta = chunk.choices?.[0]?.delta?.content ?? "";
+          if (delta) {
+            streamed += delta;
+            tokens += 1;
+            options.onToken(tokens);
+          }
         }
+        if (!streamed) throw new Error("Browser model returned an empty response.");
+        return streamed;
       }
-      if (!streamed) throw new Error("Browser model returned an empty response.");
-      return streamed;
+      const response = await this.engine.chat.completions.create({ ...request, stream: false });
+      const content = response.choices?.[0]?.message?.content;
+      if (!content) throw new Error("Browser model returned an empty response.");
+      return content;
+    } finally {
+      this.generating = false;
     }
-    const response = await this.engine.chat.completions.create({ ...request, stream: false });
-    const content = response.choices?.[0]?.message?.content;
-    if (!content) throw new Error("Browser model returned an empty response.");
-    return content;
   }
 
   cancelGeneration(): void {

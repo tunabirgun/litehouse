@@ -166,6 +166,13 @@ export function normaliseBinding(binding: string): string | null {
     }
   }
   if (!key || MODIFIER_KEYS.has(key) || !isSupportedShortcutKey(key)) return null;
+  // A bare navigation/activation key must never become a binding: it would hijack Tab
+  // focus, Enter activation, Space scroll, or Escape across the whole app. Shift alone is
+  // not enough (Shift+Tab is reverse focus). This also self-heals any such stored binding.
+  if (
+    (key === "Tab" || key === "Enter" || key === "Space" || key === "Escape")
+    && !modifiers.has("Mod") && !modifiers.has("Ctrl") && !modifiers.has("Alt")
+  ) return null;
   const orderedModifiers = MODIFIER_ORDER.filter((modifier) => modifiers.has(modifier));
   return [...orderedModifiers, key].join("+");
 }

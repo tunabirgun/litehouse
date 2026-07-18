@@ -6,6 +6,10 @@ export interface ConfirmDeleteDialogProps {
   title: string;
   body: string;
   confirmLabel: string;
+  /** While true, both buttons are disabled and Escape/backdrop are inert, so a "Keep" click
+   *  cannot race an in-flight delete. */
+  busy?: boolean;
+  busyLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -13,18 +17,22 @@ export interface ConfirmDeleteDialogProps {
 // Reusable confirmation for irreversible browser-local deletes. Rendered through a
 // portal so a fixed backdrop escapes any transformed ancestor; the destructive
 // action is carried by the confirm verb, not by colour alone.
-export function ConfirmDeleteDialog({ open, title, body, confirmLabel, onConfirm, onCancel }: ConfirmDeleteDialogProps) {
+export function ConfirmDeleteDialog({ open, title, body, confirmLabel, busy = false, busyLabel = "Deleting…", onConfirm, onCancel }: ConfirmDeleteDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const onCancelRef = useRef(onCancel);
+  const busyRef = useRef(busy);
   const titleId = useId();
   const bodyId = useId();
 
-  // Keep the latest onCancel reachable from Escape without re-running the focus effect.
+  // Keep the latest onCancel/busy reachable from Escape without re-running the focus effect.
   useEffect(() => {
     onCancelRef.current = onCancel;
   }, [onCancel]);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   useEffect(() => {
     if (!open) return;
@@ -35,6 +43,7 @@ export function ConfirmDeleteDialog({ open, title, body, confirmLabel, onConfirm
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (busyRef.current) return;
         onCancelRef.current();
         return;
       }
@@ -67,7 +76,7 @@ export function ConfirmDeleteDialog({ open, title, body, confirmLabel, onConfirm
     <div
       className="dialog-backdrop lh-confirm-delete-backdrop"
       role="presentation"
-      onClick={onCancel}
+      onClick={() => { if (!busy) onCancel(); }}
     >
       <div
         ref={dialogRef}
@@ -85,8 +94,8 @@ export function ConfirmDeleteDialog({ open, title, body, confirmLabel, onConfirm
           <p id={bodyId}>{body}</p>
         </div>
         <div className="lh-confirm-delete-actions">
-          <button ref={cancelRef} className="button button-secondary" type="button" onClick={onCancel}>Keep</button>
-          <button className="button button-danger" type="button" onClick={onConfirm}>{confirmLabel}</button>
+          <button ref={cancelRef} className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>Keep</button>
+          <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy}>{busy ? busyLabel : confirmLabel}</button>
         </div>
       </div>
     </div>,
